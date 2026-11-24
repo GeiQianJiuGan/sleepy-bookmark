@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/api"
@@ -191,6 +193,43 @@ func TestComicImagesGoThroughSignedProxy(t *testing.T) {
 	tampered := strings.Replace(ch.Images[0], "1.png", "2.png", 1)
 	if resp, _ := http.Get(c.base + tampered); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("tampered image URL: got %d", resp.StatusCode)
+	}
+}
+
+func TestConcurrentComicRequestsGetCleanImageLinks(t *testing.T) {
+	c := newClient(t, config.Config{DevLogin: true})
+	var login struct{ Token string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &login)
+	c.token = login.Token
+
+	var found struct{ Books []struct{ ID int64 } }
+	c.do("GET", "/api/search?type=comic&q=%E8%89%B2%E5%9D%97", nil, &found)
+	var chapters []struct{ ID int64 }
+	c.do("GET", "/api/books/"+itoa(found.Books[0].ID)+"/chapters", nil, &chapters)
+
+	// All of these share one fetch of the uncached chapter.
+	results := make([][]string, 16)
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var ch struct{ Images []string }
+			c.do("GET", "/api/chapters/"+itoa(chapters[0].ID), nil, &ch)
+			results[i] = ch.Images
+		}()
+	}
+	wg.Wait()
+	for _, images := range results {
+		if len(images) != 6 {
+			t.Fatalf("images: %v", images)
+		}
+		for _, img := range images {
+			u, err := url.Parse(img)
+			if err != nil || u.Path != "/api/img" || !strings.HasPrefix(u.Query().Get("u"), "http") {
+				t.Fatalf("image link was rewritten more than once: %s", img)
+			}
+		}
 	}
 }
 

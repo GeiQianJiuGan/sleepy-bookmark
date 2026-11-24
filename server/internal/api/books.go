@@ -75,10 +75,13 @@ func (s *Server) chapter(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	// Concurrent requests for an uncached chapter share one fetch result, so rewrite a copy.
+	out := *ch
+	out.Images = make([]string, len(ch.Images))
 	for i, img := range ch.Images {
-		ch.Images[i] = s.imgURL(ch.SourceID, img)
+		out.Images[i] = s.imgURL(ch.SourceID, img)
 	}
-	return c.JSON(http.StatusOK, ch)
+	return c.JSON(http.StatusOK, &out)
 }
 
 func (s *Server) cacheBook(c echo.Context) error {
