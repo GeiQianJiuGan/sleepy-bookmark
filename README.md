@@ -116,4 +116,4 @@ docker compose up -d --build
 ## 已知限制
 
 - 规则引擎不执行 JavaScript，需要 JS 渲染或有强反爬（如 Cloudflare 人机验证）的站点不支持，会提示「访问验证」并建议换源。
-- 仓库里只带演示书源，真实书源需要自己按 `docs/source-rule.md` 编写。
+- 后端默认只带演示书源。其他书源按 `docs/source-rule.md` 编写；第三方站点改版后规则需要跟着调整。
