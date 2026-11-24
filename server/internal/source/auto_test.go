@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -563,5 +564,35 @@ func TestTheRestOfAChapterThatRedirectsIsRead(t *testing.T) {
 	c, err := e.Content(context.Background(), src, srv.URL+"/book/7/12.html", srv.URL+"/book/7/13.html")
 	if err != nil || !strings.Contains(c.Text, "第一页") || !strings.Contains(c.Text, "第二页") {
 		t.Fatalf("text = %q (%v), want both pages", c.Text, err)
+	}
+}
+
+// A reader that tells its chapters apart by a parameter has a next chapter that looks like one
+// more page of this one, and the catalog knows it by another address.
+func TestAChapterThatRedirectsStopsAtTheNextOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/go/"):
+			http.Redirect(w, r, "/read?id="+strings.TrimPrefix(r.URL.Path, "/go/"), http.StatusFound)
+		case r.URL.Path == "/read" && id > 0 && r.URL.Query().Get("p") == "":
+			fmt.Fprintf(w, frame, "", fmt.Sprintf(`<div id="content">%s</div><a href="/read?id=%d&p=2">下一页</a>`,
+				strings.Repeat(fmt.Sprintf("<p>第 %d 章前半，这一段是正文的内容，写得足够长，才认得出是正文。</p>", id), 6), id))
+		case r.URL.Path == "/read" && id > 0:
+			fmt.Fprintf(w, frame, "", fmt.Sprintf(`<div id="content">%s</div><a href="/read?id=%d">下一章</a>`,
+				strings.Repeat(fmt.Sprintf("<p>第 %d 章后半，这一段是正文的内容，写得足够长，才认得出是正文。</p>", id), 6), id+1))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	src := &source.Source{Name: "章节是参数", Type: source.TypeNovel, BaseURL: srv.URL, RateLimitMs: 1}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	c, err := e.Content(context.Background(), src, srv.URL+"/go/5", srv.URL+"/go/6")
+	if err != nil || !strings.Contains(c.Text, "第 5 章前半") || !strings.Contains(c.Text, "第 5 章后半") || strings.Contains(c.Text, "第 6 章") {
+		t.Fatalf("text = %q (%v), want the two pages of chapter 5 and no more", c.Text, err)
 	}
 }
