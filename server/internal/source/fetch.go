@@ -49,7 +49,7 @@ func NewFetcher() *Fetcher {
 	// Sites hand out session cookies on the first page and expect them on the next ones.
 	jar, _ := cookiejar.New(nil)
 	return &Fetcher{
-		client: &http.Client{Timeout: 15 * time.Second, Jar: jar},
+		client: &http.Client{Timeout: 20 * time.Second, Jar: jar},
 		next:   map[string]time.Time{},
 		pages:  map[string]page{},
 	}
