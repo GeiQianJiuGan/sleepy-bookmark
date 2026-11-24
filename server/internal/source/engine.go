@@ -74,7 +74,7 @@ func markup(doc Node) (*goquery.Selection, error) {
 // searchEndpoint is the search of a site whose rule leaves it to be found on the home page.
 func (e *Engine) searchEndpoint(ctx context.Context, src *Source) (endpoint, error) {
 	e.mu.Lock()
-	known, ok := e.sites[src.BaseURL]
+	known, ok := e.sites[src.siteKey()]
 	e.mu.Unlock()
 	if ok && known.search.url != "" && time.Since(known.at) < searchTTL {
 		return known.search, nil
@@ -104,15 +104,21 @@ func (e *Engine) searchEndpoint(ctx context.Context, src *Source) (endpoint, err
 	return ep, nil
 }
 
+// siteKey tells apart what was learnt about a site with different settings: the headers and
+// the charset change what its pages are, and two sources may share an address.
+func (s *Source) siteKey() string {
+	return fmt.Sprintf("%s %s %s %v %v", s.BaseURL, s.Type, s.Charset, s.Headers, s.Public)
+}
+
 func (e *Engine) learn(src *Source, set func(*site)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.sites == nil {
 		e.sites = map[string]site{}
 	}
-	s := e.sites[src.BaseURL]
+	s := e.sites[src.siteKey()]
 	set(&s)
-	e.sites[src.BaseURL] = s
+	e.sites[src.siteKey()] = s
 }
 
 // SearchURL is where a source sends its searches, with {{key}} for the keyword.
@@ -202,7 +208,7 @@ func (e *Engine) list(ctx context.Context, src *Source, r ListRule, fill *string
 			return nil, err
 		}
 		e.mu.Lock()
-		known := e.sites[src.BaseURL].books
+		known := e.sites[src.siteKey()].books
 		e.mu.Unlock()
 		books, kind := autoBooks(sel, u, key, known)
 		if key != "" && kind != "" {

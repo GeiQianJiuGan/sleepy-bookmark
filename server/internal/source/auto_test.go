@@ -464,3 +464,28 @@ func TestASubscribedSourceIsOnlyReadFromThePublicInternet(t *testing.T) {
 		t.Fatalf("a source of a subscribed list: %v after %d requests, want it refused", err, hits.Load())
 	}
 }
+
+func TestWhatIsLearntAboutASiteIsNotUsedWithOtherHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := "/search"
+		if r.Header.Get("Cookie") != "" {
+			action = "/member/search"
+		}
+		fmt.Fprintf(w, frame, "", `<form action="`+action+`" method="get"><input type="text" name="q"><button>搜索</button></form>`)
+	}))
+	defer srv.Close()
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	for _, headers := range []map[string]string{nil, {"Cookie": "member=1"}, nil} {
+		src := &source.Source{Name: "同一个地址", Type: source.TypeNovel, BaseURL: srv.URL, Headers: headers, RateLimitMs: 1}
+		if err := src.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		want := srv.URL + "/search?q={{key}}"
+		if headers != nil {
+			want = srv.URL + "/member/search?q={{key}}"
+		}
+		if got, err := e.SearchURL(context.Background(), src); err != nil || got != want {
+			t.Errorf("headers %v: search at %q (%v), want %q", headers, got, err, want)
+		}
+	}
+}
