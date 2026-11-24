@@ -665,6 +665,29 @@ func TestFewerNoticesThatOpenInThePageAreNotTakenForPagesThatTurn(t *testing.T) 
 	}
 }
 
+func TestMoreNoticesForAnotherBookAreNotTakenForPagesThatTurn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var offer, pages strings.Builder
+		for i := 1; i <= 5; i++ {
+			fmt.Fprintf(&offer, `<a href="/manga/9/1.html"><img src="/offer/%d.png"></a>`, i)
+		}
+		for i := 1; i <= 4; i++ {
+			fmt.Fprintf(&pages, `<img src="/page/%d.jpg">`, i)
+		}
+		fmt.Fprintf(w, frame, "", `<div class="offer">`+offer.String()+`</div><div class="reader">`+pages.String()+`</div>`)
+	}))
+	defer srv.Close()
+	src := &source.Source{Name: "推广别的书的漫画", Type: source.TypeComic, BaseURL: srv.URL, RateLimitMs: 1}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	c, err := e.Content(context.Background(), src, srv.URL+"/manga/1/1.html", "")
+	if err != nil || len(c.Images) != 4 || c.Images[0] != srv.URL+"/page/1.jpg" {
+		t.Errorf("images = %v (%v), want the four pages", c.Images, err)
+	}
+}
+
 func TestTheRestOfAChapterThatRedirectsIsRead(t *testing.T) {
 	part := func(text, next string) string {
 		return `<div id="content">` + strings.Repeat("<p>"+text+"，这一段是正文的内容，写得足够长，才认得出是正文。</p>", 6) +
