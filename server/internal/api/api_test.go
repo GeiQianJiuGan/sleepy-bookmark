@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -526,6 +527,39 @@ func TestOnlyFirstWeChatUserMayRegisterWithoutWhitelist(t *testing.T) {
 	c := newClient(t, config.Config{})
 	if code := c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, nil); code == 200 {
 		t.Fatal("login succeeded without WeChat credentials")
+	}
+}
+
+func TestFailedLoginIsLoggedWithTheCallerButBounded(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	c := newClient(t, config.Config{WXAppID: "wx-real", WXSecret: "s3cret"})
+	req, _ := http.NewRequest("POST", c.base+"/api/auth/login", strings.NewReader(`{"code":"some-code"}`))
+	req.Header.Set("Content-Type", "application/json")
+	// An old build sends no appId; WeChat's Referer still names the AppID it runs under.
+	req.Header.Set("Referer", "https://servicewechat.com/wx-other/devtools/page-frame.html")
+	req.Header.Set("User-Agent", strings.Repeat("A", 100_000))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "wx-other") {
+		t.Fatalf("login = %d %s, want a 400 naming the AppID from the Referer", resp.StatusCode, body)
+	}
+
+	line := logged.String()
+	if !strings.Contains(line, "servicewechat.com/wx-other/") {
+		t.Fatalf("log does not name the caller: %q", line)
+	}
+	if len(line) > 2000 || strings.Count(line, "\n") != 1 {
+		t.Fatalf("log entry is %d bytes on %d lines", len(line), strings.Count(line, "\n"))
+	}
+	if strings.Contains(line, "some-code") || strings.Contains(line, "s3cret") {
+		t.Fatalf("log leaks a credential: %q", line)
 	}
 }
 

@@ -124,10 +124,19 @@ func (s *Server) login(c echo.Context) error {
 	if err != nil {
 		// The code is a credential, so only its length is logged.
 		log.Printf("login failed: %v (client appid %q, code of %d chars, referer %q, user agent %q)",
-			err, in.AppID, len(in.Code), req.Referer(), req.UserAgent())
+			err, clip(in.AppID), len(in.Code), clip(req.Referer()), clip(req.UserAgent()))
 		return err
 	}
 	return c.JSON(http.StatusOK, session)
+}
+
+// clip bounds what a caller who is not logged in can add to the log with one request.
+func clip(s string) string {
+	const limit = 200
+	if len(s) > limit {
+		return s[:limit] + "…"
+	}
+	return s
 }
 
 // wxReferer is the Referer WeChat puts on every request of a mini program; it names the AppID
