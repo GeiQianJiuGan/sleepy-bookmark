@@ -21,6 +21,8 @@ const (
 	// the background, and searching again shows what they found.
 	searchQuick    = 2 * time.Second
 	searchPatience = 5 * time.Second
+	// Looking for the same book in the other sources has nothing else to show, and waits longer.
+	alternativesPatience = 12 * time.Second
 	// A search waits this long for its turn at a source before it is given up.
 	searchQueueMax = 30 * time.Second
 	// What a source found is kept this long. A failure is not kept: the next search asks again,
@@ -79,6 +81,16 @@ func (l *Library) visit(row *store.SourceRow, key string, page int) *visit {
 				delete(c.m, k)
 			}
 		}
+		// Still full of answers that are good: some of them go, so that the new search is kept
+		// and searching again finds what its slow sources answered.
+		for k, v := range c.m {
+			if len(c.m) < searchCacheMax*3/4 {
+				break
+			}
+			if v.finished() {
+				delete(c.m, k)
+			}
+		}
 	}
 	v := &visit{done: make(chan struct{})}
 	if len(c.m) < searchCacheMax {
@@ -125,8 +137,8 @@ func (l *Library) visit(row *store.SourceRow, key string, page int) *visit {
 }
 
 // search asks the sources that want accepts. hit tells which books the reader is after: the
-// search answers early only once one of them was found.
-func (l *Library) search(ctx context.Context, typ, key string, page int, want func(*store.SourceRow) bool, hit func(*store.Book) bool) ([]*store.Book, []SearchError, error) {
+// search answers early only once one of them was found, and without one after patience.
+func (l *Library) search(ctx context.Context, typ, key string, page int, patienceFor time.Duration, want func(*store.SourceRow) bool, hit func(*store.Book) bool) ([]*store.Book, []SearchError, error) {
 	rows, err := l.db.Sources(typ, true)
 	if err != nil {
 		return nil, nil, err
@@ -154,7 +166,7 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 			finished <- v
 		}()
 	}
-	quick, patience := time.NewTimer(searchQuick), time.NewTimer(searchPatience)
+	quick, patience := time.NewTimer(searchQuick), time.NewTimer(patienceFor)
 	defer quick.Stop()
 	defer patience.Stop()
 	found, early := false, false

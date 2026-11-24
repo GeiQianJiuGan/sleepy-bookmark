@@ -114,7 +114,7 @@ type SearchOptions struct {
 // matches a keyword; the result is ordered by how well the title and author match it, and with
 // Exact is reduced to the books of that title.
 func (l *Library) Search(ctx context.Context, typ, key string, page int, opt SearchOptions) ([]*store.Book, []SearchError, error) {
-	books, errs, err := l.search(ctx, typ, key, page, func(r *store.SourceRow) bool {
+	books, errs, err := l.search(ctx, typ, key, page, searchPatience, func(r *store.SourceRow) bool {
 		return opt.SourceID == 0 || r.ID == opt.SourceID
 	}, func(b *store.Book) bool { return !opt.Exact || exactTitle(b.Title, key) })
 	if err != nil {
@@ -508,7 +508,7 @@ func (l *Library) Alternatives(ctx context.Context, bookID int64) ([]*store.Book
 	if err != nil {
 		return nil, err
 	}
-	found, _, err := l.search(ctx, b.Type, b.Title, 1, func(r *store.SourceRow) bool { return r.ID != b.SourceID },
+	found, _, err := l.search(ctx, b.Type, b.Title, 1, alternativesPatience, func(r *store.SourceRow) bool { return r.ID != b.SourceID },
 		func(x *store.Book) bool { return sameText(x.Title, b.Title) })
 	if err != nil {
 		return nil, err
