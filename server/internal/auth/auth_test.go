@@ -3,10 +3,12 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,7 +77,7 @@ func TestOnlyFirstAccountRegistersWithoutWhitelist(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := a.Login(context.Background(), fmt.Sprintf("openid-%d", i)); err == nil {
+			if _, err := a.Login(context.Background(), fmt.Sprintf("openid-%d", i), ""); err == nil {
 				ok.Add(1)
 			}
 		}()
@@ -89,7 +91,7 @@ func TestOnlyFirstAccountRegistersWithoutWhitelist(t *testing.T) {
 func TestTokenStopsWorkingWhenRemovedFromWhitelist(t *testing.T) {
 	fakeWeChat(t)
 	a := newAuth(t, config.Config{OpenIDWhitelist: []string{"alice", "bob"}})
-	session, err := a.Login(context.Background(), "bob")
+	session, err := a.Login(context.Background(), "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +119,7 @@ func TestTokenStopsWorkingWhenRemovedFromWhitelist(t *testing.T) {
 func TestRefreshTokenRenewsTheSessionAndNothingElse(t *testing.T) {
 	fakeWeChat(t)
 	a := newAuth(t, config.Config{OpenIDWhitelist: []string{"alice", "bob"}})
-	session, err := a.Login(context.Background(), "bob")
+	session, err := a.Login(context.Background(), "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,5 +142,67 @@ func TestRefreshTokenRenewsTheSessionAndNothingElse(t *testing.T) {
 	a.cfg.OpenIDWhitelist = []string{"alice"}
 	if _, err := a.Refresh(next.RefreshToken); err == nil {
 		t.Fatal("an account removed from the whitelist must not renew its session")
+	}
+}
+
+func TestLoginExplainsWhyWeChatRefused(t *testing.T) {
+	// This WeChat is busy the first time it sees a code, and otherwise refuses with the
+	// errcode the code names.
+	var calls atomic.Int32
+	seen := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		code := r.URL.Query().Get("js_code")
+		if code == "busy-once" && !seen[code] {
+			seen[code] = true
+			json.NewEncoder(w).Encode(map[string]any{"errcode": -1, "errmsg": "system error"})
+			return
+		}
+		if n, err := strconv.Atoi(code); err == nil {
+			json.NewEncoder(w).Encode(map[string]any{"errcode": n, "errmsg": "refused, rid: 1-2-3"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"openid": code})
+	}))
+	old := wxSessionURL
+	wxSessionURL = srv.URL
+	t.Cleanup(func() {
+		wxSessionURL = old
+		srv.Close()
+	})
+	a := newAuth(t, config.Config{})
+
+	for _, tc := range []struct {
+		code, appID string
+		status      int
+		want        string
+		calls       int32
+	}{
+		{"40029", "", http.StatusBadRequest, "登录凭证无效", 1},
+		{"40029", "wx-app", http.StatusBadRequest, "40029", 1},
+		{"45011", "", http.StatusTooManyRequests, "太频繁", 1},
+		{"12345", "", http.StatusBadGateway, "12345", 1},
+		// Refused before WeChat is asked.
+		{"real-code", "wx-other", http.StatusBadRequest, "wx-other", 0},
+		{devCode, "", http.StatusBadRequest, "不在微信小程序内", 0},
+	} {
+		calls.Store(0)
+		_, err := a.Login(context.Background(), tc.code, tc.appID)
+		var he *echo.HTTPError
+		if !errors.As(err, &he) || he.Code != tc.status || !strings.Contains(fmt.Sprint(he.Message), tc.want) {
+			t.Errorf("code %q, appid %q: got %v, want %d with %q", tc.code, tc.appID, err, tc.status, tc.want)
+			continue
+		}
+		if strings.Contains(fmt.Sprint(he.Message), "wx-secret") {
+			t.Errorf("code %q: message leaks the app secret: %v", tc.code, he.Message)
+		}
+		if calls.Load() != tc.calls {
+			t.Errorf("code %q, appid %q: WeChat was asked %d times, want %d", tc.code, tc.appID, calls.Load(), tc.calls)
+		}
+	}
+
+	calls.Store(0)
+	if _, err := a.Login(context.Background(), "busy-once", "wx-app"); err != nil || calls.Load() != 2 {
+		t.Fatalf("a busy WeChat should be asked once more: %v after %d calls", err, calls.Load())
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,7 +35,9 @@ const (
 	accessAud  = "access"
 	refreshAud = "refresh"
 	devOpenID  = "dev"
-	userKey    = "userID"
+	// devCode is what a client outside WeChat (the H5 build) sends instead of a wx.login code.
+	devCode = "h5-dev"
+	userKey = "userID"
 )
 
 var ErrForbidden = errors.New("该微信账号不在白名单内")
@@ -124,12 +127,15 @@ func (a *Auth) Refresh(refreshToken string) (*Session, error) {
 	return a.session(id)
 }
 
-// Login exchanges a wx.login code for a session.
-func (a *Auth) Login(ctx context.Context, code string) (*Session, error) {
+// Login exchanges a wx.login code for a session. appID is the AppID the mini program runs
+// under, when the client reports it.
+func (a *Auth) Login(ctx context.Context, code, appID string) (*Session, error) {
 	openid := devOpenID
 	if !a.cfg.DevLogin {
 		var err error
-		if openid, err = a.code2Session(ctx, code); err != nil {
+		if openid, err = a.wxOpenID(ctx, code, appID); err != nil {
+			// The code is a credential, so only its length is logged.
+			log.Printf("login failed: %v (client appid %q, code of %d chars)", err, appID, len(code))
 			return nil, err
 		}
 	}
@@ -170,10 +176,62 @@ func (a *Auth) mayRegister(openid string) bool {
 
 var wxSessionURL = "https://api.weixin.qq.com/sns/jscode2session"
 
-func (a *Auth) code2Session(ctx context.Context, code string) (string, error) {
-	if a.cfg.WXAppID == "" || a.cfg.WXSecret == "" {
-		return "", errors.New("服务端未配置 WX_APPID / WX_SECRET")
+// wxErrors are the code2session refusals worth explaining, by errcode.
+var wxErrors = map[int]struct {
+	status int
+	msg    string
+}{
+	-1:    {http.StatusBadGateway, "微信服务繁忙，请稍后再试"},
+	40013: {http.StatusInternalServerError, "服务端配置的 WX_APPID 不正确"},
+	40125: {http.StatusInternalServerError, "服务端配置的 WX_SECRET 不正确"},
+	// A code only works for the AppID it was issued to, once, within five minutes.
+	40029: {http.StatusBadRequest, "登录凭证无效：请确认小程序使用的 AppID 与服务端一致，然后重试"},
+	40163: {http.StatusBadRequest, "登录凭证已被使用，请重试"},
+	40226: {http.StatusForbidden, "该微信账号被微信判定为高风险，无法登录"},
+	45011: {http.StatusTooManyRequests, "登录太频繁，请一分钟后再试"},
+}
+
+// wxOpenID checks what the client sent and asks WeChat whose code it is.
+// Its errors are worded for the user; what WeChat answered is their internal error.
+func (a *Auth) wxOpenID(ctx context.Context, code, appID string) (string, error) {
+	switch {
+	case a.cfg.WXAppID == "" || a.cfg.WXSecret == "":
+		return "", echo.NewHTTPError(http.StatusInternalServerError, "服务端未配置 WX_APPID / WX_SECRET")
+	case code == devCode:
+		return "", echo.NewHTTPError(http.StatusBadRequest, "当前不在微信小程序内，无法微信登录（H5 调试版只能连接开启 DEV_LOGIN 的后端）")
+	case appID != "" && appID != a.cfg.WXAppID:
+		return "", echo.NewHTTPError(http.StatusBadRequest,
+			fmt.Sprintf("小程序使用的 AppID（%s）与服务端配置的（%s）不一致", appID, a.cfg.WXAppID))
 	}
+	openid, err := a.code2Session(ctx, code)
+	var refused *wxError
+	if errors.As(err, &refused) && refused.code == -1 {
+		// "System busy": WeChat asks to try again shortly.
+		time.Sleep(500 * time.Millisecond)
+		openid, err = a.code2Session(ctx, code)
+	}
+	if errors.As(err, &refused) {
+		known, ok := wxErrors[refused.code]
+		if !ok {
+			known.status, known.msg = http.StatusBadGateway, "微信登录失败"
+		}
+		return "", echo.NewHTTPError(known.status, fmt.Sprintf("%s（微信错误码 %d）", known.msg, refused.code)).SetInternal(refused)
+	}
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusBadGateway, err.Error())
+	}
+	return openid, nil
+}
+
+// wxError is a refusal from WeChat's code2session.
+type wxError struct {
+	code int
+	msg  string
+}
+
+func (e *wxError) Error() string { return fmt.Sprintf("code2session: %d %s", e.code, e.msg) }
+
+func (a *Auth) code2Session(ctx context.Context, code string) (string, error) {
 	q := url.Values{"appid": {a.cfg.WXAppID}, "secret": {a.cfg.WXSecret}, "js_code": {code}, "grant_type": {"authorization_code"}}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, wxSessionURL+"?"+q.Encode(), nil)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
@@ -192,10 +250,10 @@ func (a *Auth) code2Session(ctx context.Context, code string) (string, error) {
 		ErrMsg  string `json:"errmsg"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", fmt.Errorf("微信服务器的回复无法识别：%w", err)
 	}
 	if out.OpenID == "" {
-		return "", fmt.Errorf("微信登录失败：%d %s", out.ErrCode, out.ErrMsg)
+		return "", &wxError{out.ErrCode, out.ErrMsg}
 	}
 	return out.OpenID, nil
 }

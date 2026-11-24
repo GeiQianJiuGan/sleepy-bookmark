@@ -73,6 +73,14 @@ docker compose up -d --build
 2. 把根目录 `app.config.json` 的 `serverUrl`（或 `miniapp/.env.production` 的 `VITE_API_BASE`）改成 `https://你的域名`。
 3. `npm run build:mp-weixin`，用微信开发者工具导入 `miniapp/dist/build/mp-weixin` 并上传，在小程序后台设为体验版。
 
+### 登录失败时
+
+登录页会显示原因，服务端日志（`journalctl -u sleepy-bookmark`）里有微信返回的原始错误码和 rid。
+
+- **AppID 不一致**：小程序运行时的 AppID 和服务端的 `WX_APPID` 不是同一个。检查开发者工具「详情 → 基本信息」里的 AppID（测试号、游客模式都不行）。
+- **登录凭证无效（40029）**：`wx.login` 的 code 只对签发它的 AppID 有效、只能用一次、5 分钟内有效。服务端的 AppID 和 AppSecret 不对时是另外两个错误码（40013、40125）。
+- **当前不在微信小程序内**：H5 版没有微信登录，只能连接 `DEV_LOGIN=true` 的后端。
+
 ## 功能
 
 - 登录：启动时本机有 refresh token 就换新 token，没有或已失效就进登录页；登录页先弹《用户协议与隐私政策》，同意后才调用微信登录；「我的」里可以退出登录、查看政策和撤回同意
@@ -100,7 +108,7 @@ docker compose up -d --build
 
 | 接口 | 说明 |
 |---|---|
-| `POST /api/auth/login` | `{code}` 换 `{token, refreshToken, expiresIn}`。`token` 有效 2 小时，`refreshToken` 有效 30 天 |
+| `POST /api/auth/login` | `{code, appId}` 换 `{token, refreshToken, expiresIn}`。`code` 来自 `wx.login`，`appId` 是小程序运行时的 AppID（可不传，传了会和服务端的 `WX_APPID` 核对）。`token` 有效 2 小时，`refreshToken` 有效 30 天 |
 | `POST /api/auth/refresh` | `{refreshToken}` 换一组新的 token；返回 401 表示需要重新登录 |
 | `GET /api/img?s=&u=&sig=` | 图片代理，地址由后端签名生成 |
 | `GET/POST /api/sources`，`PUT/DELETE /api/sources/:id` | 书源管理 |
