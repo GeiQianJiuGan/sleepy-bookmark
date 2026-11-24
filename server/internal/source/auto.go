@@ -745,7 +745,8 @@ func turns(base, to string) bool {
 	if u.Path == from.Path {
 		return u.RawQuery != from.RawQuery
 	}
-	if shape(u) == shape(from) {
+	// What a site adds after the path says where the reader came from, not what the page is.
+	if shape(&url.URL{Path: u.Path}) == shape(&url.URL{Path: from.Path}) {
 		return true
 	}
 	if rest, ok := strings.CutPrefix(u.Path, stem(from)); ok && rest != "" && strings.ContainsRune("_-/", rune(rest[0])) {

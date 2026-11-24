@@ -621,6 +621,27 @@ func TestPagesThatLinkToTheirOwnPageAreReadAndNotWhatAScriptLists(t *testing.T) 
 	}
 }
 
+func TestPagesThatTurnAreReadWhenTheChapterWasOpenedWithAQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var pages strings.Builder
+		for i := 1; i <= 4; i++ {
+			fmt.Fprintf(&pages, `<a href="/manga/1/2.html"><img src="/page/%d.jpg"></a>`, i)
+		}
+		fmt.Fprintf(w, frame, `<script>var skin = ["https://static.invalid/a.png", "https://static.invalid/b.png"]</script>`,
+			`<div class="reader">`+pages.String()+`</div>`)
+	}))
+	defer srv.Close()
+	src := &source.Source{Name: "带参数的章节", Type: source.TypeComic, BaseURL: srv.URL, RateLimitMs: 1}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	c, err := e.Content(context.Background(), src, srv.URL+"/manga/1/1.html?from=home", "")
+	if err != nil || len(c.Images) != 4 || c.Images[0] != srv.URL+"/page/1.jpg" {
+		t.Errorf("images = %v (%v), want the four pages", c.Images, err)
+	}
+}
+
 func TestTheRestOfAChapterThatRedirectsIsRead(t *testing.T) {
 	part := func(text, next string) string {
 		return `<div id="content">` + strings.Repeat("<p>"+text+"，这一段是正文的内容，写得足够长，才认得出是正文。</p>", 6) +
