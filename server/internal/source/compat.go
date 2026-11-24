@@ -345,7 +345,7 @@ func convertLegadoExpr(raw string, isList bool) string {
 		s = strings.TrimSpace(s[:idx])
 	}
 	// Some lists write alternatives with one bar; XPath has its own meaning for it.
-	if isList && !strings.Contains(s, "||") && !strings.HasPrefix(s, "/") && !strings.HasPrefix(strings.ToLower(s), "@xpath:") {
+	if isList && !strings.Contains(s, "||") && !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "./") && !strings.HasPrefix(strings.ToLower(s), "@xpath:") && !strings.Contains(s, "[") {
 		s = strings.ReplaceAll(s, "|", "||")
 	}
 	// When fallback alternatives are separated by || or &&, take the first branch.
