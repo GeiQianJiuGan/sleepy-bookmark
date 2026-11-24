@@ -4,14 +4,25 @@ import { onShow } from '@dcloudio/uni-app'
 import { api, type Task } from '@/api'
 import { formatBytes, offlineBooks, offlineBytes, offlineSupported, removeOfflineBook, type OfflineBook } from '@/utils/offline'
 
+import { clearReadCache, READ_CACHE_LIMIT, readCacheBytes, readCacheCount } from '@/utils/readCache'
+
 const STATUS: Record<Task['status'], string> = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败' }
 
 const books = ref<OfflineBook[]>([])
 const tasks = ref<Task[]>([])
 const total = computed(() => books.value.reduce((sum, b) => sum + offlineBytes(b), 0))
 
+// The reading cache looks after itself; the page only shows how full it is.
+const cache = ref({ bytes: 0, count: 0 })
+
+function clearCache() {
+  clearReadCache()
+  cache.value = { bytes: 0, count: 0 }
+}
+
 async function load() {
   books.value = offlineBooks()
+  cache.value = { bytes: readCacheBytes(), count: readCacheCount() }
   try {
     tasks.value = await api.tasks()
   } catch {
@@ -57,6 +68,18 @@ function remove(b: OfflineBook) {
     </view>
 
     <view class="section">
+      <text>阅读缓存</text>
+      <text class="muted">已用 {{ formatBytes(cache.bytes) }} / {{ formatBytes(READ_CACHE_LIMIT) }}</text>
+    </view>
+    <view class="item">
+      <view class="main">
+        <view>{{ cache.count }} 章小说</view>
+        <view class="muted">读过的和后面几章会自动缓存，满了先清最久没读的</view>
+      </view>
+      <text v-if="cache.count" class="link" @click="clearCache">清空</text>
+    </view>
+
+    <view class="section">
       <text>服务器缓存任务</text>
       <text class="link" @click="load">刷新</text>
     </view>
@@ -69,7 +92,7 @@ function remove(b: OfflineBook) {
         <view v-if="t.error" class="muted ellipsis">{{ t.error }}</view>
       </view>
     </view>
-    <view v-if="!tasks.length" class="hint muted">在书籍详情页点「服务器缓存」，服务器会提前抓好全本</view>
+    <view v-if="!tasks.length" class="hint muted">在书籍详情页点「服务器缓存」，服务器会提前抓好全本；加入书架的漫画会自动保存</view>
   </view>
 </template>
 
