@@ -185,6 +185,7 @@ func TestLoginExplainsWhyWeChatRefused(t *testing.T) {
 		// Refused before WeChat is asked.
 		{"real-code", "wx-other", http.StatusBadRequest, "wx-other", 0},
 		{devCode, "", http.StatusBadRequest, "不在微信小程序内", 0},
+		{mockCode, "wx-app", http.StatusBadRequest, "模拟登录凭证", 0},
 		// What the client sent is not repeated when it could forge a log line.
 		{"real-code", "wx-other\n2026/11/24 forged", http.StatusBadRequest, "无法识别", 0},
 	} {
