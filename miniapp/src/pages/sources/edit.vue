@@ -58,16 +58,35 @@ function rule(): unknown {
   }
 }
 
+/** The rule in the JSON box, when it is one rule and not a list or something half typed. */
+function written(): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(text.value)
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+// The two modes edit one source: what was typed in one is there in the other.
 function setMode(next: boolean) {
   if (next === advanced.value) return
   report.value = null
-  if (next && !text.value.trim()) {
-    // Whatever a rule leaves out is recognised, so this is a rule already.
-    text.value = JSON.stringify(
-      { name: name.value.trim(), type: type.value, baseUrl: baseUrl.value.trim() || 'https://' },
-      null,
-      2,
-    )
+  const json = written()
+  if (next) {
+    // Whatever a rule leaves out is recognised, so a name, a type and an address are a rule already.
+    const typed = { name: name.value.trim(), type: type.value, baseUrl: baseUrl.value.trim() }
+    if (json) {
+      if (typed.name) json.name = typed.name
+      if (typed.baseUrl) json.baseUrl = typed.baseUrl
+      text.value = JSON.stringify({ ...json, type: typed.type }, null, 2)
+    } else if (!text.value.trim()) {
+      text.value = JSON.stringify({ ...typed, baseUrl: typed.baseUrl || 'https://' }, null, 2)
+    }
+  } else if (json) {
+    if (typeof json.name === 'string') name.value = json.name
+    if (json.type === 'novel' || json.type === 'comic') type.value = json.type
+    if (typeof json.baseUrl === 'string') baseUrl.value = json.baseUrl
   }
   advanced.value = next
 }
