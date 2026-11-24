@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,8 @@ type client struct {
 	site *httptest.Server
 	lib  *library.Library
 	dir  string
+	// gone is a path of the demo site that answers 404, if set.
+	gone atomic.Pointer[string]
 }
 
 func (c *client) do(method, path string, body any, out any) int {
@@ -249,7 +252,15 @@ func TestSwitchSourceMovesShelfAndProgress(t *testing.T) {
 
 func newClient(t *testing.T, cfg config.Config) *client {
 	t.Helper()
-	site := httptest.NewServer(demo.Handler())
+	c := &client{t: t}
+	pages := demo.Handler()
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gone := c.gone.Load(); gone != nil && r.URL.Path == *gone {
+			http.NotFound(w, r)
+			return
+		}
+		pages.ServeHTTP(w, r)
+	}))
 	t.Cleanup(site.Close)
 
 	cfg.DataDir = t.TempDir()
@@ -272,7 +283,8 @@ func newClient(t *testing.T, cfg config.Config) *client {
 	}
 	srv := httptest.NewServer(api.New(db, a, lib, disk))
 	t.Cleanup(srv.Close)
-	return &client{t: t, base: srv.URL, site: site, lib: lib, dir: cfg.DataDir}
+	c.base, c.site, c.lib, c.dir = srv.URL, site, lib, cfg.DataDir
+	return c
 }
 
 func TestReadingFlow(t *testing.T) {
@@ -778,6 +790,41 @@ func TestFavoritedComicIsSavedOnTheServer(t *testing.T) {
 	if c.files("kept") != 0 {
 		t.Fatalf("after deleting the source: %d kept", c.files("kept"))
 	}
+}
+
+func TestAPageThatIsGoneDoesNotStopTheRestOfAComicFromBeingSaved(t *testing.T) {
+	c := newClient(t, config.Config{DevLogin: true, RefreshInterval: 300 * time.Millisecond, KeptMaxMB: 100})
+	var login struct{ Token string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &login)
+	c.token = login.Token
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go c.lib.Run(ctx)
+
+	var found struct{ Books []struct{ ID int64 } }
+	c.do("GET", "/api/search?type=comic&q=%E8%89%B2%E5%9D%97", nil, &found)
+	id := itoa(found.Books[0].ID)
+	var chapters []struct{ ID int64 }
+	c.do("GET", "/api/books/"+id+"/chapters", nil, &chapters)
+	var ch struct{ Origins []string }
+	c.do("GET", "/api/chapters/"+itoa(chapters[0].ID), nil, &ch)
+	// The first page of the first chapter: every other page comes after it.
+	gone, _ := url.Parse(ch.Origins[0])
+	c.gone.Store(&gone.Path)
+	want := len(chapters)*len(ch.Origins) - 1
+
+	c.do("PUT", "/api/favorites/"+id, nil, nil)
+	saved := func(by string) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); c.files("kept") != want; time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: %d kept, want %d", by, c.files("kept"), want)
+			}
+		}
+	}
+	saved("the job of the favorite")
+	os.RemoveAll(filepath.Join(c.dir, "kept"))
+	saved("the periodic refresh")
 }
 
 func TestRefreshEndpoint(t *testing.T) {

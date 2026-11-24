@@ -159,7 +159,8 @@ func (l *Library) refreshFavorites(ctx context.Context) {
 
 // saveComic brings the saved copy of a comic on a shelf up to date: every chapter whose pages
 // are not all kept yet, whenever it was added to the catalog and whoever read it since. It stops
-// when the kept images are full, so that the pages are not fetched again on every round.
+// when the kept images are full, so that the pages are not fetched again on every round, and
+// when the site does not answer; a chapter or a page that the site no longer has is passed over.
 func (l *Library) saveComic(ctx context.Context, b *store.Book) {
 	chapters, err := l.db.Chapters(b.ID)
 	if err != nil {
@@ -171,7 +172,9 @@ func (l *Library) saveComic(ctx context.Context, b *store.Book) {
 		}
 		if err := l.cacheChapter(ctx, b, ch, true); err != nil {
 			log.Printf("save %q #%d: %v", b.Title, ch.Idx, err)
-			return
+			if source.Kind(err) != source.KindNotFound {
+				return
+			}
 		}
 	}
 }

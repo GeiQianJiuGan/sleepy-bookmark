@@ -405,16 +405,21 @@ func (l *Library) cacheChapter(ctx context.Context, b *store.Book, ch *store.Cha
 		return err
 	}
 	keep := l.db.Favorited(b.ID)
+	var failed error
 	for _, img := range c.Images {
 		// Without room among the kept images, one in the cache is as far as it goes.
 		if keep && l.disk.KeepImage(img) || l.disk.HasImage(img) {
 			continue
 		}
 		if _, err := l.fetchImage(ctx, b.SourceID, img, keep); err != nil {
-			return err
+			// A page that the site no longer has does not cost the chapter its other pages.
+			if ctx.Err() != nil || source.Kind(err) != source.KindNotFound {
+				return err
+			}
+			failed = err
 		}
 	}
-	return nil
+	return failed
 }
 
 // Image returns a source image from the disk, or from the source and then caches it.
