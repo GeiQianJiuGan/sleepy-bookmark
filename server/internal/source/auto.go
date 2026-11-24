@@ -744,7 +744,7 @@ func turns(base, to string) bool {
 		return u.RawQuery != from.RawQuery
 	}
 	// What a site adds after the path says where the reader came from, not what the page is.
-	if shape(&url.URL{Path: u.Path}) == shape(&url.URL{Path: from.Path}) && oneBook(from.Path, u.Path) {
+	if shape(&url.URL{Path: u.Path}) == shape(&url.URL{Path: from.Path}) {
 		return true
 	}
 	if rest, ok := strings.CutPrefix(u.Path, stem(from)); ok && rest != "" && strings.ContainsRune("_-/", rune(rest[0])) {
@@ -752,24 +752,6 @@ func turns(base, to string) bool {
 	}
 	dir := strings.TrimSuffix(u.Path, "/") + "/"
 	return dir != "/" && strings.HasPrefix(from.Path, dir)
-}
-
-// oneBook tells whether two addresses of one shape may lie in one book: where a number comes
-// ahead of the chapter's own, it is the book's, and is the same. A site that numbers its chapters
-// alone gives nothing to tell by.
-func oneBook(a, b string) bool {
-	as, bs := strings.Split(strings.Trim(a, "/"), "/"), strings.Split(strings.Trim(b, "/"), "/")
-	book := -1
-	for i, s := range as {
-		if !reDigits.MatchString(s) {
-			continue
-		}
-		if book >= 0 {
-			return len(bs) > book && as[book] == bs[book]
-		}
-		book = i
-	}
-	return true
 }
 
 // endpoint is where a site takes a search, with {{key}} for the keyword.
