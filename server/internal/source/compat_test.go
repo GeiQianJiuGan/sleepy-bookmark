@@ -166,6 +166,7 @@ func TestLegadoImagesAndBars(t *testing.T) {
 		"css:img.page":         "css:img.page@src",
 		"css:.pages img":       "css:.pages img@src",
 		"css:.man_img@html":    "css:.man_img img@src",
+		"css:.comic-img":       "css:.comic-img img@src",
 		"css:div>img[data-x]":  "css:div>img[data-x]@src",
 		"css:amp-img@data-src": "css:amp-img@data-src",
 	} {
@@ -174,9 +175,10 @@ func TestLegadoImagesAndBars(t *testing.T) {
 		}
 	}
 	for in, want := range map[string]string{
-		"li[lang|=zh]": "css:li[lang|=zh]",
-		"./li|./dd":    "xpath:./li|./dd",
-		".a|.b":        "css:.a, .b",
+		"li[lang|=zh]":          "css:li[lang|=zh]",
+		"./li|./dd":             "xpath:./li|./dd",
+		".a|.b":                 "css:.a, .b",
+		".d a[href]|.m a[href]": "css:.d a[href], .m a[href]",
 	} {
 		if got := convertLegadoExpr(in, true); got != want {
 			t.Errorf("%s: %q, want %q", in, got, want)
