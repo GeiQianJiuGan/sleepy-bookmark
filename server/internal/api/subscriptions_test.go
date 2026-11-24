@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -214,7 +215,7 @@ func TestDeletingASubscriptionThatDoesNotExistDeletesNothing(t *testing.T) {
 	}
 	var sources []sourceInfo
 	c.do("GET", "/api/sources", nil, &sources)
-	if len(sources) != 1 {
-		t.Fatalf("sources = %+v, want the one that was added", sources)
+	if !slices.ContainsFunc(sources, func(s sourceInfo) bool { return s.Name == "甲" }) || len(sources) != 3 {
+		t.Fatalf("%d sources left, want the two of the demo and the one that was added", len(sources))
 	}
 }
