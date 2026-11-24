@@ -70,11 +70,11 @@ func (l *Library) loadSource(id int64) (*source.Source, error) {
 }
 
 // parseSource reads the rule of a stored source. One that came with a subscribed list was
-// written by someone else, and is kept to public addresses.
+// written by someone else, and is kept to public addresses, subscribed to still or not.
 func parseSource(row *store.SourceRow) (*source.Source, error) {
 	src, err := source.ParseSource([]byte(row.Rule))
 	if src != nil {
-		src.Public = row.SubscriptionID != 0
+		src.Public = row.Listed
 	}
 	return src, err
 }
@@ -530,7 +530,7 @@ func (l *Library) SeedSource(src source.Source) error {
 		return nil
 	}
 	raw, _ := json.Marshal(src)
-	_, err := l.db.CreateSource(src.Name, src.Type, string(raw))
+	_, err := l.db.CreateSource(src.Name, src.Type, string(raw), 0)
 	return err
 }
 

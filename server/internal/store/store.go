@@ -86,14 +86,19 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	// Columns added after the first release are missing from a database created before them.
-	var has int
-	err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name = 'subscription_id'`).Scan(&has)
-	if err == nil && has == 0 {
-		_, err = db.Exec(`ALTER TABLE sources ADD COLUMN subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL`)
-	}
-	if err != nil {
-		db.Close()
-		return nil, err
+	for _, col := range [][2]string{
+		{"subscription_id", "INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL"},
+		{"listed", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		var has int
+		err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name = ?`, col[0]).Scan(&has)
+		if err == nil && has == 0 {
+			_, err = db.Exec(`ALTER TABLE sources ADD COLUMN ` + col[0] + ` ` + col[1])
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return &DB{db}, nil
 }
@@ -151,13 +156,16 @@ type SourceRow struct {
 	UpdatedAt int64  `json:"updatedAt"`
 	// SubscriptionID is the subscription that the source was last imported from, 0 if none.
 	SubscriptionID int64 `json:"subscriptionId,omitempty"`
+	// Listed is set for good on a source that a subscribed list wrote, whether or not the
+	// subscription is still there: such a source is read from public addresses only.
+	Listed bool `json:"-"`
 }
 
-const sourceCols = `id, name, type, enabled, rule, updated_at, COALESCE(subscription_id, 0)`
+const sourceCols = `id, name, type, enabled, rule, updated_at, COALESCE(subscription_id, 0), listed`
 
 func scanSource(s interface{ Scan(...any) error }) (*SourceRow, error) {
 	var r SourceRow
-	err := s.Scan(&r.ID, &r.Name, &r.Type, &r.Enabled, &r.Rule, &r.UpdatedAt, &r.SubscriptionID)
+	err := s.Scan(&r.ID, &r.Name, &r.Type, &r.Enabled, &r.Rule, &r.UpdatedAt, &r.SubscriptionID, &r.Listed)
 	return &r, notFound(err)
 }
 
@@ -188,8 +196,10 @@ func (d *DB) SourceByName(name string) (*SourceRow, error) {
 	return scanSource(d.QueryRow(`SELECT `+sourceCols+` FROM sources WHERE name = ?`, name))
 }
 
-func (d *DB) CreateSource(name, typ, rule string) (int64, error) {
-	res, err := d.Exec(`INSERT INTO sources (name, type, rule, updated_at) VALUES (?, ?, ?, ?)`, name, typ, rule, now())
+// CreateSource adds a source, as one of the subscription if that is not 0.
+func (d *DB) CreateSource(name, typ, rule string, subscription int64) (int64, error) {
+	res, err := d.Exec(`INSERT INTO sources (name, type, rule, updated_at, subscription_id, listed)
+		VALUES (?, ?, ?, ?, NULLIF(?, 0), ?)`, name, typ, rule, now(), subscription, subscription != 0)
 	if err != nil {
 		return 0, err
 	}
@@ -279,8 +289,9 @@ func (d *DB) DeleteSubscription(id int64) error {
 	return err
 }
 
+// SetSourceSubscription makes a source one of a subscribed list.
 func (d *DB) SetSourceSubscription(sourceID, subscriptionID int64) error {
-	_, err := d.Exec(`UPDATE sources SET subscription_id = ? WHERE id = ?`, subscriptionID, sourceID)
+	_, err := d.Exec(`UPDATE sources SET subscription_id = ?, listed = 1 WHERE id = ?`, subscriptionID, sourceID)
 	return err
 }
 

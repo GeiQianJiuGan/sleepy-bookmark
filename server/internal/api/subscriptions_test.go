@@ -287,3 +287,33 @@ func TestSyncingDoesNotAddASourceAgainWhenItsNameIsTaken(t *testing.T) {
 		t.Fatalf("%d sources, want %d", got, before+1)
 	}
 }
+
+func TestASourceOfAListKeepsToPublicAddressesOnceUnsubscribed(t *testing.T) {
+	c := login(t)
+	srv, body := listServer(t)
+	rule := map[string]string{"name": "列表带来的", "type": "novel", "baseUrl": c.site.URL + "/demo/novel"}
+	raw, _ := json.Marshal(rule)
+	list := string(raw)
+	body.Store(&list)
+	var res subscriptionResult
+	if code := c.do("POST", "/api/subscriptions", map[string]string{"url": srv.URL + "/list.json"}, &res); code != 200 || res.Added != 1 {
+		t.Fatalf("subscribe: %d %+v", code, res)
+	}
+	if code := c.do("DELETE", fmt.Sprintf("/api/subscriptions/%d", res.Subscription.ID), nil, nil); code != http.StatusNoContent {
+		t.Fatalf("unsubscribe: %d", code)
+	}
+	all := c.sources("")
+	kept := all[len(all)-1]
+	if kept.Name != rule["name"] {
+		t.Fatalf("the source is gone with its subscription: %+v", all)
+	}
+
+	// The site of the tests is on this machine, which a list is not let near.
+	api.SetLocalLists(false)
+	defer api.SetLocalLists(true)
+	var found searchResult
+	c.do("GET", fmt.Sprintf("/api/search?type=novel&q=%%E6%%98%%9F%%E6%%B2%%B3&source=%d", kept.ID), nil, &found)
+	if len(found.Books) != 0 || len(found.Errors) != 1 || !strings.Contains(found.Errors[0].Error, "公网") {
+		t.Fatalf("search of the kept source: %+v", found)
+	}
+}

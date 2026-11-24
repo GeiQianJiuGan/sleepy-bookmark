@@ -121,19 +121,21 @@ func (s *Server) importRules(rules []*source.Source, subscription int64) (ids []
 			same = same[mine : mine+1]
 		}
 		if len(same) == 1 {
+			id = same[0].ID
+			// The source is the list's before it has the list's rule, not after: a rule that
+			// someone else wrote is never read as one written here.
+			if subscription != 0 {
+				if err := s.db.SetSourceSubscription(id, subscription); err != nil {
+					return ids, updated, err
+				}
+			}
 			if err := s.replaceRule(same[0], src); err != nil {
 				return ids, updated, err
 			}
-			id = same[0].ID
 			updated++
 		} else {
 			raw, _ := json.Marshal(src)
-			if id, err = s.db.CreateSource(src.Name, src.Type, string(raw)); err != nil {
-				return ids, updated, err
-			}
-		}
-		if subscription != 0 {
-			if err := s.db.SetSourceSubscription(id, subscription); err != nil {
+			if id, err = s.db.CreateSource(src.Name, src.Type, string(raw), subscription); err != nil {
 				return ids, updated, err
 			}
 		}
