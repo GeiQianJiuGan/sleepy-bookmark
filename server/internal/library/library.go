@@ -472,8 +472,9 @@ func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) 
 	if err != nil {
 		return err
 	}
-	// Reading the catalog first proves that the new source works for this book.
-	chapters, err := l.Chapters(ctx, toID, false)
+	// Reading the catalog again first proves that the new source works for this book right now;
+	// without the refresh a catalog stored earlier would hide that it is down too.
+	chapters, err := l.Chapters(ctx, toID, true)
 	if err != nil {
 		return err
 	}
