@@ -82,6 +82,10 @@ func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]R
 	}
 	lists := make([][]*store.Book, len(rows))
 	visits := make(chan struct{}, maxVisits)
+	// With more sources than are visited at a time, the ones not reached in the time of one
+	// visit show the list they had; a later request reaches them.
+	turn, cancel := context.WithTimeout(ctx, recommendTimeout)
+	defer cancel()
 	var wg sync.WaitGroup
 	for i, row := range rows {
 		if sourceID != 0 && row.ID != sourceID {
@@ -90,9 +94,17 @@ func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]R
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			visits <- struct{}{}
-			defer func() { <-visits }()
-			lists[i] = l.recommend(ctx, row)
+			if old, due := l.recommends.get(row); !due {
+				lists[i] = old
+				return
+			}
+			select {
+			case visits <- struct{}{}:
+				defer func() { <-visits }()
+				lists[i] = l.recommend(ctx, row)
+			case <-turn.Done():
+				lists[i], _ = l.recommends.get(row)
+			}
 		}()
 	}
 	wg.Wait()

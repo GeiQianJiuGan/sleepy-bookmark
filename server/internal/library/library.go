@@ -175,19 +175,31 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 				results[i].err = errPaused
 				return
 			}
+			queued := false
 			select {
 			case visits <- struct{}{}:
-				defer func() { <-visits }()
-			case <-ctx.Done():
-				results[i].err = errNotReached
-				return
+			default:
+				queued = true
+				select {
+				case visits <- struct{}{}:
+				case <-ctx.Done():
+					results[i].err = errNotReached
+					return
+				}
 			}
+			defer func() { <-visits }()
 			src, err := parseSource(row)
 			if err == nil {
 				start := time.Now()
 				results[i].books, err = l.engine.Search(ctx, src, key, page)
-				l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(results[i].books) > 0, err)
-				l.health.note(row.ID, err)
+				// A visit that waited its turn had less than its time; running out of it
+				// says nothing about the site.
+				if queued && ctx.Err() != nil && err != nil {
+					err = errNotReached
+				} else {
+					l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(results[i].books) > 0, err)
+					l.health.note(row.ID, err)
+				}
 			}
 			results[i].err = err
 		}()
