@@ -56,16 +56,67 @@ func (s *Server) recommend(c echo.Context) error {
 		return err
 	}
 	for i, g := range groups {
-		// The lists are cached and shared between requests, so sign the cover on a copy.
 		books := make([]*store.Book, len(g.Books))
 		for i, b := range g.Books {
-			signed := *b
-			signed.Cover = s.imgURL(b.SourceID, b.Cover)
-			books[i] = &signed
+			books[i] = s.signed(b)
 		}
 		groups[i].Books = books
 	}
 	return c.JSON(http.StatusOK, groups)
+}
+
+// pageParams reads offset and limit; a page is 20 books unless asked otherwise, 50 at most.
+func pageParams(c echo.Context) (offset, limit int) {
+	offset, _ = strconv.Atoi(c.QueryParam("offset"))
+	limit, _ = strconv.Atoi(c.QueryParam("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	return max(offset, 0), min(limit, 50)
+}
+
+// signed returns a copy of a book with a cover link the client can load. The lists are cached
+// and shared between requests, so the book itself is left alone.
+func (s *Server) signed(b *store.Book) *store.Book {
+	out := *b
+	out.Cover = s.imgURL(b.SourceID, b.Cover)
+	return &out
+}
+
+// rank is one source's list, a page at a time.
+func (s *Server) rank(c echo.Context) error {
+	sourceID, err := sourceParam(c)
+	if err != nil {
+		return err
+	}
+	if sourceID == 0 {
+		return badRequest("缺少书源编号 source")
+	}
+	offset, limit := pageParams(c)
+	list, total, err := s.lib.Rank(c.Request().Context(), sourceID, offset, limit)
+	if err != nil {
+		return err
+	}
+	books := make([]*store.Book, len(list.Books))
+	for i, b := range list.Books {
+		books[i] = s.signed(b)
+	}
+	return c.JSON(http.StatusOK, echo.Map{"sourceId": list.SourceID, "sourceName": list.SourceName, "total": total, "books": books})
+}
+
+// feed is the recommendations across all sources, a page at a time.
+func (s *Server) feed(c echo.Context) error {
+	offset, limit := pageParams(c)
+	books, total, err := s.lib.Feed(c.Request().Context(), auth.UserID(c), c.QueryParam("type"), offset, limit)
+	if err != nil {
+		return err
+	}
+	out := make([]library.FeedBook, len(books))
+	for i, b := range books {
+		b.Book = s.signed(b.Book)
+		out[i] = b
+	}
+	return c.JSON(http.StatusOK, echo.Map{"total": total, "books": out})
 }
 
 func (s *Server) shelfJSON(c echo.Context, books []*store.ShelfBook, err error) error {

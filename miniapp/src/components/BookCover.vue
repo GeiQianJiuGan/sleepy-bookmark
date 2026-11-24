@@ -4,7 +4,8 @@ import type { Book } from '@/api'
 import { absoluteUrl } from '@/api/http'
 import { useAppStore } from '@/stores/app'
 
-const props = defineProps<{ book: Pick<Book, 'title' | 'cover'> }>()
+// `flat` is for a cover that fills the top of a card, which has the corners and the shadow.
+const props = defineProps<{ book: Pick<Book, 'title' | 'cover'>; flat?: boolean }>()
 const store = useAppStore()
 // A cover that fails to load (dead image link) falls back to the title card.
 const broken = ref(false)
@@ -15,7 +16,7 @@ watch(
 </script>
 
 <template>
-  <view class="cover">
+  <view class="cover" :class="{ flat }">
     <image
       v-if="book.cover && !broken && !store.dataSaver"
       class="img"
@@ -38,6 +39,11 @@ watch(
   border-radius: 10rpx;
   background: #e9e4da;
   box-shadow: 0 4rpx 14rpx rgba(60, 40, 20, 0.12);
+
+  &.flat {
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 .img,

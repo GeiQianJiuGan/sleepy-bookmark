@@ -89,7 +89,9 @@ docker compose up -d --build
 - 左上角的图标在小说 / 漫画之间整体切换，书架、搜索、历史都按当前模式过滤
 - 书源管理：新增、批量导入、编辑、启停、删除、在线测试
 - 多书源并发搜索，可以只搜某一个书源；搜索框右侧的按钮展开高级选项，可选模糊（默认，按书名相关度排序）或精确（书名完全一致）
-- 搜索页按书源分组显示推荐，每个书源前 10 本（书源规则里配了 `recommend` 才有）
+- 搜索页没有输入关键词时是两列瀑布流，向下滑动继续加载，分「推荐」和「排行」两个视图（书源规则里配了 `recommend` 才有）
+  - 排行：选一个书源，按站点榜单的顺序看
+  - 推荐：各书源的榜单合并成一份，同一本书只出现一次，书架和历史里已有的书不再推荐（算法见 [docs/source-rule.md](docs/source-rule.md#推荐和排行)）
 - 阅读器：小说和漫画都是上下滑动，不显示滚动条，滑到底自动接下一章；点屏幕中间弹出菜单（上一章 / 下一章、目录、背景、夜间模式；小说可调字号和行距，漫画可调页间距和图片线路）
 - 书架、历史和阅读进度保存在服务器
 - 阅读缓存：小说读过的章节和后面 3 章自动存在本机（小程序里上限 30 MB），满了先删最久没读的；漫画不在本机缓存
@@ -117,7 +119,9 @@ docker compose up -d --build
 | `PUT /api/sources/:id/enabled` | 启停 |
 | `POST /api/sources/test` | 不保存，直接测试一条规则 |
 | `GET /api/search?type=&q=&page=&source=&match=` | 搜索。`source` 是书源 id，不传搜全部；`match=exact` 只留书名完全一致的 |
-| `GET /api/recommend?type=&source=` | 各书源的推荐，每个书源最多 10 本；`source` 不传返回全部 |
+| `GET /api/rank?source=&offset=&limit=` | 一个书源的榜单，分页（每页默认 20、最多 50 本），返回 `total` 和 `books` |
+| `GET /api/feed?type=&offset=&limit=` | 跨书源去重的推荐，分页；每本带 `sources`（上榜的书源数）和 `reason` |
+| `GET /api/recommend?type=&source=` | 旧版小程序用：各书源榜单的前 10 本 |
 | `GET /api/books/:id`，`GET /api/books/:id/chapters?refresh=1` | 详情、目录 |
 | `GET /api/chapters/:id` | 正文或图片列表 |
 | `GET /api/books/:id/alternatives` | 其他书源里的同名书 |

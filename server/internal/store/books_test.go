@@ -187,3 +187,35 @@ func TestReplaceTocPairsSameTitledChaptersInOrder(t *testing.T) {
 		}
 	}
 }
+
+// A list that names the book again does not undo what its detail page said.
+func TestUpsertBookKeepsTheDetailPage(t *testing.T) {
+	db, id := newBook(t)
+	b, err := db.Book(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := Book{SourceID: b.SourceID, Type: "novel", URL: "book", Title: "list title", Author: "更新至 12", Cover: "list.jpg", Latest: "12"}
+	if _, err := db.UpsertBook(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ = db.Book(id); b.Title != "list title" || b.Author != "更新至 12" {
+		t.Fatalf("before the detail page the list is all there is: %+v", b)
+	}
+
+	b.Title, b.Author, b.Cover, b.Latest = "full title", "author", "", "12"
+	if err := db.SetBookDetail(b); err != nil {
+		t.Fatal(err)
+	}
+	listed.Latest = "13"
+	if got, err := db.UpsertBook(&listed); err != nil || got != id {
+		t.Fatalf("upsert: id %d, %v", got, err)
+	}
+	b, _ = db.Book(id)
+	if b.Title != "full title" || b.Author != "author" {
+		t.Errorf("the list replaced the detail page: %q by %q", b.Title, b.Author)
+	}
+	if b.Cover != "list.jpg" || b.Latest != "13" {
+		t.Errorf("cover %q, latest %q: the list fills an empty field and knows the latest chapter", b.Cover, b.Latest)
+	}
+}

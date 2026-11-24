@@ -849,3 +849,67 @@ func TestImportReplacesTheSourceOfTheSameName(t *testing.T) {
 		t.Errorf("source %d was not updated in place: %s", list[0].ID, after[0].Rule)
 	}
 }
+
+func TestRankAndFeed(t *testing.T) {
+	c := login(t)
+	type book struct {
+		ID, SourceID int64
+		Title, Cover string
+		Sources      int
+		Reason       string
+	}
+	var rank struct {
+		SourceName string
+		Total      int
+		Books      []book
+	}
+	src := c.sources("?type=novel")[0]
+	c.do("GET", "/api/rank?type=novel&source="+itoa(src.ID)+"&limit=4", nil, &rank)
+	if rank.SourceName != src.Name || len(rank.Books) != 4 || rank.Total <= 10 {
+		t.Fatalf("first page of the ranking: %+v", rank)
+	}
+	total, first := rank.Total, rank.Books[0]
+	if first.Title != "演示小说：星河旅人" || !strings.HasPrefix(first.Cover, "/api/img?") {
+		t.Fatalf("first of the ranking: %+v", first)
+	}
+	c.do("GET", "/api/rank?source="+itoa(src.ID)+"&offset="+itoa(int64(total-2))+"&limit=4", nil, &rank)
+	if len(rank.Books) != 2 {
+		t.Fatalf("last page of the ranking: %d books", len(rank.Books))
+	}
+	if code := c.do("GET", "/api/rank?type=novel", nil, nil); code != http.StatusBadRequest {
+		t.Fatalf("ranking without a source: %d", code)
+	}
+
+	// Two sources with the same books: each book is recommended once.
+	c.addCopy("copy", "")
+	var feed struct {
+		Total int
+		Books []book
+	}
+	// (The demo site has two books of one title by different authors, which stay two.)
+	seen := map[int64]bool{}
+	for offset := 0; offset == 0 || offset < feed.Total; offset += 5 {
+		c.do("GET", "/api/feed?type=novel&limit=5&offset="+itoa(int64(offset)), nil, &feed)
+		for _, b := range feed.Books {
+			if seen[b.ID] || b.Sources != 2 || !strings.HasPrefix(b.Cover, "/api/img?") {
+				t.Fatalf("feed book %+v, seen before: %v", b, seen[b.ID])
+			}
+			seen[b.ID] = true
+		}
+	}
+	if feed.Total != total || len(seen) != total {
+		t.Fatalf("feed of %d books (%d read) from two lists of %d", feed.Total, len(seen), total)
+	}
+
+	// A book the reader has opened or put on the shelf is not recommended again.
+	c.do("PUT", "/api/favorites/"+itoa(first.ID), nil, nil)
+	c.do("GET", "/api/feed?type=novel&limit=50", nil, &feed)
+	if feed.Total != total-1 {
+		t.Fatalf("feed of %d books with one of %d on the shelf", feed.Total, total)
+	}
+	for _, b := range feed.Books {
+		if b.Title == first.Title {
+			t.Fatalf("%q is on the shelf and still recommended", b.Title)
+		}
+	}
+}

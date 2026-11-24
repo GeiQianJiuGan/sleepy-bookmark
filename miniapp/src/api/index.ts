@@ -72,10 +72,15 @@ export interface SearchResult {
   errors: { source: string; error: string; kind: string }[]
 }
 
-export interface Recommendation {
-  sourceId: number
-  sourceName: string
-  books: Book[]
+/** A recommended book: one entry however many sources list it. */
+export interface FeedBook extends Book {
+  sources: number
+  reason?: string
+}
+
+export interface BookPage<T = Book> {
+  total: number
+  books: T[]
 }
 
 const q = encodeURIComponent
@@ -87,9 +92,12 @@ export const api = {
       'GET',
       `/search?type=${type}&q=${q(key)}` + (opt.source ? `&source=${opt.source}` : '') + (opt.exact ? '&match=exact' : ''),
     ),
-  /** The first books of one source's recommendation list; empty when it has none or cannot be read. */
-  recommend: (type: Mode, source: number) =>
-    request<Recommendation[]>('GET', `/recommend?type=${type}&source=${source}`),
+  /** One source's list, a page at a time. */
+  rank: (source: number, offset: number, limit = 20) =>
+    request<BookPage>('GET', `/rank?source=${source}&offset=${offset}&limit=${limit}`),
+  /** Recommendations merged from the lists of all sources, without the books already read. */
+  feed: (type: Mode, offset: number, limit = 20) =>
+    request<BookPage<FeedBook>>('GET', `/feed?type=${type}&offset=${offset}&limit=${limit}`),
   book: (id: number) => request<Book>('GET', `/books/${id}`),
   chapters: (bookId: number, refresh = false) =>
     request<Chapter[]>('GET', `/books/${bookId}/chapters${refresh ? '?refresh=1' : ''}`),

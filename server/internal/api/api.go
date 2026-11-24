@@ -49,6 +49,8 @@ func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *ec
 
 	g.GET("/search", s.search)
 	g.GET("/recommend", s.recommend)
+	g.GET("/rank", s.rank)
+	g.GET("/feed", s.feed)
 	g.GET("/books/:id", s.book)
 	g.GET("/books/:id/chapters", s.chapters)
 	g.GET("/books/:id/alternatives", s.alternatives)

@@ -11,7 +11,9 @@ import (
 )
 
 const (
-	recommendCount   = 10
+	recommendCount = 10
+	// rankMax is how much of a source's list is kept for the ranking and the feed.
+	rankMax          = 100
 	recommendMaxAge  = 30 * time.Minute
 	recommendTimeout = 10 * time.Second
 	// A list that could not be read is not asked for again for this long, so that a dead site
@@ -19,7 +21,7 @@ const (
 	recommendRetryAfter = 5 * time.Minute
 )
 
-// Recommendation is the top of one source's recommendation list.
+// Recommendation is one source's recommendation list, or a part of it.
 type Recommendation struct {
 	SourceID   int64         `json:"sourceId"`
 	SourceName string        `json:"sourceName"`
@@ -69,11 +71,11 @@ func (c *recommendCache) put(row *store.SourceRow, books []*store.Book, ok bool)
 	c.m[row.ID] = e
 }
 
-// Recommend returns the first books of the recommendation list of every enabled source of the
-// given type that has one, or of the one source when sourceID is set. A source whose list cannot
-// be read is left out, or keeps showing its previous list: recommendations are optional and
-// their failures are not worth a message.
-func (l *Library) Recommend(ctx context.Context, typ string, sourceID int64) ([]Recommendation, error) {
+// rankings returns the recommendation list of every enabled source of the given type that has
+// one, or of the one source when sourceID is set. A source whose list cannot be read is left
+// out, or keeps showing its previous list: recommendations are optional and their failures are
+// not worth a message.
+func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]Recommendation, error) {
 	rows, err := l.db.Sources(typ, true)
 	if err != nil {
 		return nil, err
@@ -99,6 +101,35 @@ func (l *Library) Recommend(ctx context.Context, typ string, sourceID int64) ([]
 		}
 	}
 	return out, nil
+}
+
+// Recommend returns the first books of each list, see rankings.
+func (l *Library) Recommend(ctx context.Context, typ string, sourceID int64) ([]Recommendation, error) {
+	out, err := l.rankings(ctx, typ, sourceID)
+	for i := range out {
+		out[i].Books = out[i].Books[:min(len(out[i].Books), recommendCount)]
+	}
+	return out, err
+}
+
+// Rank returns a page of one source's list and the length of the whole list.
+func (l *Library) Rank(ctx context.Context, sourceID int64, offset, limit int) (Recommendation, int, error) {
+	row, err := l.db.Source(sourceID)
+	if err != nil {
+		return Recommendation{}, 0, err
+	}
+	out := Recommendation{SourceID: row.ID, SourceName: row.Name, Books: []*store.Book{}}
+	if !row.Enabled {
+		return out, 0, nil
+	}
+	books := l.recommend(ctx, row)
+	out.Books = page(books, offset, limit)
+	return out, len(books), nil
+}
+
+func page[T any](list []T, offset, limit int) []T {
+	offset = min(max(offset, 0), len(list))
+	return list[offset:min(offset+max(limit, 0), len(list))]
 }
 
 func (l *Library) recommend(ctx context.Context, row *store.SourceRow) []*store.Book {
@@ -131,10 +162,10 @@ func (l *Library) readRecommend(ctx context.Context, row *store.SourceRow, src *
 	if err != nil {
 		return nil, err
 	}
-	books := make([]*store.Book, 0, recommendCount)
+	books := make([]*store.Book, 0, min(len(infos), rankMax))
 	seen := map[string]bool{}
 	for _, info := range infos {
-		if len(books) == recommendCount {
+		if len(books) == rankMax {
 			break
 		}
 		if seen[info.URL] {

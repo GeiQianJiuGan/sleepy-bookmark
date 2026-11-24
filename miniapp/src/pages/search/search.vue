@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
-import { api, type Book, type Recommendation, type SearchResult, type Source } from '@/api'
+import { computed, ref, watch, type Ref } from 'vue'
+import { onPullDownRefresh, onReachBottom, onShow } from '@dcloudio/uni-app'
+import { api, type Book, type BookPage, type FeedBook, type SearchResult, type Source } from '@/api'
 import { errorText } from '@/api/http'
 import { useAppStore } from '@/stores/app'
 import AppBar from '@/components/AppBar.vue'
-import BookCover from '@/components/BookCover.vue'
 import BookItem from '@/components/BookItem.vue'
+import BookWaterfall from '@/components/BookWaterfall.vue'
 import LoadState from '@/components/LoadState.vue'
 
 const store = useAppStore()
@@ -20,45 +20,118 @@ const exact = ref(false)
 const showOptions = ref(false)
 const sourceName = computed(() => sources.value.find((s) => s.id === sourceId.value)?.name || '全部书源')
 
-// Before a search the page shows what each source recommends, in the order of the sources.
-const lists = ref<Record<number, Recommendation>>({})
-const homeLoading = ref(true)
-const groups = computed(() =>
-  sources.value
-    .filter((s) => s.rule.recommend)
-    .map((s) => lists.value[s.id])
-    .filter((g) => g?.books.length),
-)
-const shownGroups = computed(() =>
-  sourceId.value ? groups.value.filter((g) => g.sourceId === sourceId.value) : groups.value,
-)
+// Before a search the page shows books to pick from: the recommendations merged from all
+// sources, or the ranking of one source. Both load a page at a time as the reader scrolls.
+type Pager = ReturnType<typeof usePager<Book>>
+function usePager<T extends Book>(fetch: (offset: number) => Promise<BookPage<T>>) {
+  const items = ref<T[]>([]) as Ref<T[]>
+  const loading = ref(false)
+  const failed = ref(false)
+  const done = ref(false)
+  // What the server has handed out, which is more than `items` when a book came twice.
+  let offset = 0
+  let seq = 0
 
-// Loads the sources and their recommendations. Both are extras of this page, so a failure only
-// leaves what was there; the search itself reports its own errors. Each source is asked on its
-// own, so that a slow site does not hold back the lists of the others.
+  async function load(reset = false) {
+    if (reset) {
+      seq++
+      offset = 0
+      loading.value = done.value = false
+    } else if (loading.value || done.value) return
+    const mine = seq
+    loading.value = true
+    failed.value = false
+    try {
+      const res = await fetch(offset)
+      if (mine !== seq) return
+      offset += res.books.length
+      const have = new Set(reset ? [] : items.value.map((b) => b.id))
+      const fresh = res.books.filter((b) => !have.has(b.id))
+      items.value = reset ? fresh : items.value.concat(fresh)
+      done.value = !res.books.length || offset >= res.total
+    } catch {
+      // These lists are extras of the page: a quiet line with a retry, not a message.
+      if (mine === seq) failed.value = true
+    } finally {
+      if (mine === seq) loading.value = false
+    }
+  }
+
+  function clear() {
+    seq++
+    offset = 0
+    items.value = []
+    loading.value = failed.value = done.value = false
+  }
+
+  return { items, loading, failed, done, load, clear }
+}
+
+const tab = ref<'feed' | 'rank'>('feed')
+const feed = usePager<FeedBook>((offset) => api.feed(store.mode, offset))
+const rankSources = computed(() => sources.value.filter((s) => s.rule.recommend))
+const rankSourceId = ref(0)
+const rank = usePager<Book>((offset) => api.rank(rankSourceId.value, offset))
+const pager = computed<Pager>(() => (tab.value === 'feed' ? feed : rank))
+const sourcesLoaded = ref(false)
+const sourcesFailed = ref(false)
+// The enabled sources the lists on the page were made from.
+let listedSources = ''
+
+function pickTab(t: 'feed' | 'rank') {
+  tab.value = t
+  if (!pager.value.items.value.length) loadList(true)
+}
+
+function pickRankSource(id: number) {
+  if (rankSourceId.value === id) return
+  rankSourceId.value = id
+  rank.clear()
+  rank.load(true)
+}
+
+function loadList(reset = false) {
+  if (tab.value === 'rank' && !rankSourceId.value) return Promise.resolve()
+  return pager.value.load(reset)
+}
+
+// Loads the sources, and the list of the open tab when it is still empty. A failure only
+// leaves what was there; the search itself reports its own errors.
 async function loadHome() {
   const mode = store.mode
   const list = await api.sources(mode).catch(() => null)
   if (mode !== store.mode) return
+  sourcesFailed.value = !list
   if (list) {
     sources.value = list.filter((s) => s.enabled)
+    // A source was added, removed or switched: the lists may hold books that are gone.
+    const ids = sources.value.map((s) => s.id).join()
+    if (sourcesLoaded.value && ids !== listedSources) {
+      feed.clear()
+      rank.clear()
+    }
+    listedSources = ids
+    sourcesLoaded.value = true
     // The source that was searched is gone, and so are its books.
     if (sourceId.value && !sources.value.some((s) => s.id === sourceId.value)) pickSource(0)
+    if (!rankSources.value.some((s) => s.id === rankSourceId.value)) {
+      rankSourceId.value = rankSources.value[0]?.id || 0
+      rank.clear()
+    }
   }
-  await Promise.all(
-    sources.value
-      .filter((s) => s.rule.recommend)
-      .map(async (s) => {
-        const res = await api.recommend(mode, s.id).catch(() => null)
-        if (res && mode === store.mode) lists.value = { ...lists.value, [s.id]: res[0] }
-      }),
-  )
-  if (mode === store.mode) homeLoading.value = false
+  if (!pager.value.items.value.length && !pager.value.loading.value) await loadList(true)
 }
+
+// The line under a list that did not load: the sources first when those are missing.
+const listFailed = computed(() => pager.value.failed.value || (sourcesFailed.value && !sourcesLoaded.value))
+const retryList = () => (sourcesLoaded.value ? loadList(!pager.value.items.value.length) : loadHome())
 
 const keyword = ref('')
 const books = ref<Book[]>([])
 const errors = ref<SearchResult['errors']>([])
+// A long result list is put on the page a screen at a time.
+const PAGE = 20
+const shown = ref(PAGE)
 const loading = ref(false)
 const searched = ref(false)
 const error = ref('')
@@ -78,6 +151,7 @@ async function search() {
     const res = await api.search(store.mode, key, { source: sourceId.value, exact: exact.value })
     if (seq !== latest) return
     books.value = res.books
+    shown.value = PAGE
     errors.value = res.errors
     searched.value = true
   } catch (e) {
@@ -116,10 +190,41 @@ function setExact(value: boolean) {
   if (searching.value) search()
 }
 
-const open = (b: Book) => uni.navigateTo({ url: `/pages/book/detail?id=${b.id}` })
+// The book that was opened from the page, looked at again on the way back.
+let opened = 0
+const open = (b: Book) => {
+  opened = b.id
+  uni.navigateTo({ url: `/pages/book/detail?id=${b.id}` })
+}
+
+// A book that was put on the shelf or read is no longer a recommendation.
+async function dropKnown() {
+  const id = opened
+  opened = 0
+  if (!id || !feed.items.value.some((b) => b.id === id)) return
+  const book = await api.book(id).catch(() => null)
+  if (book?.favorite || book?.progress) feed.items.value = feed.items.value.filter((b) => b.id !== id)
+}
 const toSources = () => uni.navigateTo({ url: '/pages/sources/list' })
 
-onShow(loadHome)
+onShow(() => {
+  dropKnown()
+  loadHome()
+})
+onReachBottom(() => {
+  if (searching.value) shown.value = Math.min(shown.value + PAGE, books.value.length)
+  else loadList()
+})
+onPullDownRefresh(async () => {
+  if (searching.value) await search()
+  else {
+    // loadHome fills an empty list itself; a list that is there is read again.
+    const had = pager.value.items.value.length > 0
+    await loadHome()
+    if (had) await loadList(true)
+  }
+  uni.stopPullDownRefresh()
+})
 // An emptied search box goes back to the recommendations.
 watch(keyword, (k) => {
   if (!k.trim() && searching.value) reset()
@@ -129,9 +234,11 @@ watch(
   () => {
     reset()
     sources.value = []
-    lists.value = {}
+    sourcesLoaded.value = sourcesFailed.value = false
     sourceId.value = 0
-    homeLoading.value = true
+    rankSourceId.value = 0
+    feed.clear()
+    rank.clear()
     loadHome()
     search()
   },
@@ -167,9 +274,30 @@ watch(
       <view class="muted">
         {{ exact ? `只显示${kind}名和关键词完全一致的结果` : `${kind}名或作者包含关键词，按相关度排序` }}
       </view>
+      <view v-if="sources.length" class="row scope">
+        <view class="label">搜索范围</view>
+      </view>
+      <view v-if="sources.length" class="wrap">
+        <view class="chip" :class="{ active: !sourceId }" @click="pickSource(0)">全部书源</view>
+        <view
+          v-for="s in sources"
+          :key="s.id"
+          class="chip"
+          :class="{ active: sourceId === s.id }"
+          @click="pickSource(s.id)"
+        >
+          {{ s.name }}
+        </view>
+      </view>
     </view>
 
-    <scroll-view class="chips" scroll-x :show-scrollbar="false">
+    <view v-if="!searching" class="tabs">
+      <view class="tab" :class="{ active: tab === 'feed' }" @click="pickTab('feed')">推荐</view>
+      <view class="tab" :class="{ active: tab === 'rank' }" @click="pickTab('rank')">排行</view>
+      <view class="muted tip">{{ tab === 'feed' ? '各书源榜单合并去重' : '按书源看榜单' }}</view>
+    </view>
+
+    <scroll-view v-if="searching" class="chips" scroll-x enhanced :show-scrollbar="false">
       <view class="chip" :class="{ active: !sourceId }" @click="pickSource(0)">全部书源</view>
       <view
         v-for="s in sources"
@@ -181,6 +309,17 @@ watch(
         {{ s.name }}
       </view>
     </scroll-view>
+    <scroll-view v-else-if="tab === 'rank' && rankSources.length" class="chips" scroll-x enhanced :show-scrollbar="false">
+      <view
+        v-for="s in rankSources"
+        :key="s.id"
+        class="chip"
+        :class="{ active: rankSourceId === s.id }"
+        @click="pickRankSource(s.id)"
+      >
+        {{ s.name }}
+      </view>
+    </scroll-view>
 
     <template v-if="searching">
       <LoadState v-if="loading || error" :loading="loading" :error="error" @retry="search" />
@@ -188,8 +327,11 @@ watch(
         <view v-if="books.length" class="summary muted">
           {{ sourceName }} · {{ exact ? '精确' : '模糊' }} · {{ books.length }} 本
         </view>
-        <view v-for="b in books" :key="b.id" @click="open(b)">
+        <view v-for="b in books.slice(0, shown)" :key="b.id" @click="open(b)">
           <BookItem :book="b" show-intro />
+        </view>
+        <view v-if="books.length > PAGE" class="foot muted">
+          {{ shown < books.length ? '上滑继续加载' : `已显示全部 ${books.length} 本` }}
         </view>
         <LoadState
           v-if="!books.length"
@@ -216,38 +358,26 @@ watch(
     </template>
 
     <template v-else>
-      <view v-for="g in shownGroups" :key="g.sourceId" class="section">
-        <view class="head">
-          <view class="bar" />
-          <view class="source ellipsis">{{ g.sourceName }}</view>
-          <view class="muted">推荐 · 前 {{ g.books.length }}</view>
-        </view>
-        <scroll-view class="shelf" scroll-x :show-scrollbar="false">
-          <view v-for="(b, i) in g.books" :key="b.id" class="card" @click="open(b)">
-            <view class="cover">
-              <BookCover :book="b" />
-              <view class="rank" :class="{ top: i < 3 }">{{ i + 1 }}</view>
-            </view>
-            <view class="title">{{ b.title }}</view>
-            <view class="muted ellipsis">{{ b.author || '未知作者' }}</view>
-          </view>
-        </scroll-view>
-      </view>
+      <BookWaterfall :books="pager.items.value" :ranked="tab === 'rank'" @open="open" />
 
-      <!-- Placeholders in the shape of a section while the first lists load. -->
-      <view v-if="homeLoading && !shownGroups.length" class="section">
-        <view class="head"><view class="bar" /><view class="ghost line" /></view>
-        <view class="shelf ghosts">
-          <view v-for="n in 4" :key="n" class="card"><view class="ghost block" /></view>
-        </view>
+      <!-- Placeholders in the shape of the cards while the first page loads. -->
+      <view v-if="!pager.items.value.length && !listFailed && (pager.loading.value || !sourcesLoaded)" class="ghosts">
+        <view v-for="n in 4" :key="n" class="ghost"><view class="block" /><view class="line" /><view class="line short" /></view>
       </view>
-      <view v-else-if="!shownGroups.length" class="hint">
+      <view v-else-if="listFailed" class="foot muted" @click="retryList">
+        没有加载出来，点这里重试
+      </view>
+      <view v-else-if="pager.loading.value" class="foot"><wd-loading size="40rpx" /></view>
+      <view v-else-if="pager.items.value.length" class="foot muted">
+        {{ pager.done.value ? `已显示全部 ${pager.items.value.length} 本` : '上滑继续加载' }}
+      </view>
+      <view v-else class="hint">
         <template v-if="!sources.length">
           <view class="muted">还没有启用的{{ kind }}书源</view>
           <wd-button custom-style="margin-top: 36rpx" size="small" @click="toSources">去书源管理</wd-button>
         </template>
         <view v-else class="muted">
-          {{ sourceId ? `「${sourceName}」` : '这些书源' }}暂时没有推荐，输入关键词直接搜索
+          {{ tab === 'feed' ? '暂时没有新的推荐' : '这个书源暂时没有榜单' }}，输入关键词直接搜索
         </view>
       </view>
     </template>
@@ -330,6 +460,24 @@ watch(
   .label {
     font-size: 28rpx;
   }
+
+  .scope {
+    margin-top: 24rpx;
+  }
+
+  // All sources at once, on as many lines as they take.
+  .wrap {
+    display: flex;
+    flex-wrap: wrap;
+
+    .chip {
+      margin-bottom: 12rpx;
+
+      &:not(.active) {
+        background: #f3efe8;
+      }
+    }
+  }
 }
 
 .chips {
@@ -384,112 +532,78 @@ watch(
   padding: 4rpx 32rpx 16rpx;
 }
 
-.section {
-  margin: 4rpx 24rpx 24rpx;
-  padding: 28rpx 0 24rpx;
-  border-radius: 20rpx;
-  background: #fff;
-}
-
-.head {
+.tabs {
   display: flex;
-  align-items: center;
-  padding: 0 28rpx 24rpx;
-
-  .bar {
-    flex: none;
-    width: 8rpx;
-    height: 30rpx;
-    margin-right: 16rpx;
-    border-radius: 4rpx;
-    background: var(--brand);
-  }
-
-  .source {
-    flex: 1;
-    min-width: 0;
-    font-size: 30rpx;
-    font-weight: 600;
-  }
-
-  .muted {
-    flex: none;
-    margin-left: 16rpx;
-  }
+  align-items: baseline;
+  padding: 4rpx 32rpx 20rpx;
 }
 
-.shelf {
-  width: 100%;
-  white-space: nowrap;
-}
-
-.card {
-  display: inline-block;
-  width: 176rpx;
-  margin-right: 24rpx;
-  vertical-align: top;
-  white-space: normal;
-
-  &:first-child {
-    margin-left: 28rpx;
-  }
-
-  .muted {
-    margin-top: 4rpx;
-    font-size: 22rpx;
-  }
-}
-
-.cover {
+.tab {
   position: relative;
-}
+  margin-right: 40rpx;
+  padding-bottom: 12rpx;
+  font-size: 30rpx;
+  color: #8a8178;
 
-.rank {
-  position: absolute;
-  top: 0;
-  left: 0;
-  min-width: 40rpx;
-  height: 40rpx;
-  font-size: 22rpx;
-  font-weight: 700;
-  line-height: 40rpx;
-  text-align: center;
-  color: #fff;
-  border-radius: 10rpx 0 14rpx 0;
-  background: rgba(43, 38, 34, 0.62);
+  &.active {
+    font-size: 34rpx;
+    font-weight: 700;
+    color: #2b2622;
 
-  &.top {
-    background: var(--brand);
+    &::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      width: 36rpx;
+      height: 6rpx;
+      margin-left: -18rpx;
+      border-radius: 3rpx;
+      background: var(--brand);
+    }
   }
 }
 
-.title {
-  display: -webkit-box;
-  height: 72rpx;
-  margin-top: 14rpx;
-  overflow: hidden;
-  font-size: 26rpx;
-  line-height: 36rpx;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.tip {
+  flex: 1;
+  text-align: right;
 }
 
 .ghosts {
-  overflow: hidden;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 0 24rpx;
 }
 
 .ghost {
-  border-radius: 10rpx;
-  background: #f0ece5;
+  width: calc(50% - 10rpx);
+  margin-bottom: 20rpx;
+  padding-bottom: 24rpx;
+  overflow: hidden;
+  border-radius: 20rpx;
+  background: #fff;
 
-  &.line {
-    width: 200rpx;
-    height: 30rpx;
-  }
-
-  &.block {
+  .block {
     padding-top: 133%;
+    background: #f0ece5;
   }
+
+  .line {
+    height: 28rpx;
+    margin: 20rpx 20rpx 0;
+    border-radius: 8rpx;
+    background: #f0ece5;
+
+    &.short {
+      width: 40%;
+    }
+  }
+}
+
+.foot {
+  padding: 12rpx 32rpx 48rpx;
+  text-align: center;
 }
 
 .hint {

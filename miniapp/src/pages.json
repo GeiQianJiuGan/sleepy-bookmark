@@ -7,7 +7,7 @@
   },
   "pages": [
     { "path": "pages/shelf/shelf", "style": { "navigationBarTitleText": "书架", "navigationStyle": "custom", "enablePullDownRefresh": true } },
-    { "path": "pages/search/search", "style": { "navigationBarTitleText": "搜索", "navigationStyle": "custom" } },
+    { "path": "pages/search/search", "style": { "navigationBarTitleText": "搜索", "navigationStyle": "custom", "enablePullDownRefresh": true, "onReachBottomDistance": 300 } },
     { "path": "pages/mine/mine", "style": { "navigationBarTitleText": "我的", "navigationStyle": "custom" } },
     { "path": "pages/book/detail", "style": { "navigationBarTitleText": "详情" } },
     { "path": "pages/reader/reader", "style": { "navigationBarTitleText": "阅读", "navigationStyle": "custom" } },

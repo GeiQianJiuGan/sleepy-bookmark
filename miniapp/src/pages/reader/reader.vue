@@ -489,7 +489,7 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
     </view>
 
     <wd-popup v-model="catalog" position="left">
-      <scroll-view scroll-y class="catalog" :scroll-into-view="catalog ? `c-${currentId}` : ''">
+      <scroll-view scroll-y enhanced :show-scrollbar="false" class="catalog" :scroll-into-view="catalog ? `c-${currentId}` : ''">
         <view :style="{ height: statusBar + 'px' }" />
         <view
           v-for="c in chapters"

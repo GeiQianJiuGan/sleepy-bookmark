@@ -57,16 +57,19 @@ func (d *DB) Book(id int64) (*Book, error) {
 	return scanBook(d.QueryRow(`SELECT `+bookCols+` FROM books b JOIN sources s ON s.id = b.source_id WHERE b.id = ?`, id))
 }
 
-// UpsertBook stores a search hit and returns its id; empty fields never overwrite known values.
+// UpsertBook stores a book from a search or a list and returns its id. Empty fields never
+// overwrite known values, and once the detail page has been read a list only fills in what
+// that page left empty: a list often has a shorter title or another text in place of the
+// author. The latest chapter is the exception, which a list may know better.
 func (d *DB) UpsertBook(b *Book) (int64, error) {
 	var id int64
 	err := d.QueryRow(`INSERT INTO books (source_id, type, url, title, author, cover, intro, latest)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (source_id, url) DO UPDATE SET
-			title  = CASE WHEN excluded.title  != '' THEN excluded.title  ELSE title  END,
-			author = CASE WHEN excluded.author != '' THEN excluded.author ELSE author END,
-			cover  = CASE WHEN excluded.cover  != '' THEN excluded.cover  ELSE cover  END,
-			intro  = CASE WHEN excluded.intro  != '' THEN excluded.intro  ELSE intro  END,
+			title  = CASE WHEN excluded.title  != '' AND (detail_at = 0 OR title  = '') THEN excluded.title  ELSE title  END,
+			author = CASE WHEN excluded.author != '' AND (detail_at = 0 OR author = '') THEN excluded.author ELSE author END,
+			cover  = CASE WHEN excluded.cover  != '' AND (detail_at = 0 OR cover  = '') THEN excluded.cover  ELSE cover  END,
+			intro  = CASE WHEN excluded.intro  != '' AND (detail_at = 0 OR intro  = '') THEN excluded.intro  ELSE intro  END,
 			latest = CASE WHEN excluded.latest != '' THEN excluded.latest ELSE latest END
 		RETURNING id`, b.SourceID, b.Type, b.URL, b.Title, b.Author, b.Cover, b.Intro, b.Latest).Scan(&id)
 	return id, err

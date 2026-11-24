@@ -25,6 +25,15 @@ page {
   font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
 }
 
+// No scrollbars anywhere: the pages scroll by touch. scroll-view needs `enhanced` and
+// `:show-scrollbar="false"` as well, this covers the rest and the browsers.
+::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+  color: transparent;
+}
+
 .link {
   color: var(--brand);
 }
