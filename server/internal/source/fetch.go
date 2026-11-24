@@ -21,7 +21,9 @@ const (
 
 type page struct {
 	body []byte
-	at   time.Time
+	// url is the address the body came from, after redirects.
+	url string
+	at  time.Time
 }
 
 // Fetcher downloads source pages with per-site throttling and a short-lived page cache
@@ -64,16 +66,17 @@ func (f *Fetcher) throttle(ctx context.Context, src *Source) error {
 	}
 }
 
-func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string, limit int64) ([]byte, string, error) {
+// do returns the body, its content type and the final URL after redirects.
+func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string, limit int64) ([]byte, string, string, error) {
 	if err := f.throttle(ctx, src); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if method == "" {
 		method = http.MethodGet
 	}
 	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), url, strings.NewReader(body))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	req.Header.Set("User-Agent", defaultUA)
 	req.Header.Set("Referer", src.BaseURL+"/")
@@ -85,29 +88,30 @@ func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string,
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, "", fmt.Errorf("%s 返回 HTTP %d", url, resp.StatusCode)
+		return nil, "", "", fmt.Errorf("%s 返回 HTTP %d", url, resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
-	return data, resp.Header.Get("Content-Type"), err
+	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), err
 }
 
-// Page fetches a text page and converts it to UTF-8.
-func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body string) ([]byte, error) {
+// Page fetches a text page and converts it to UTF-8. It also returns the page's final URL
+// after redirects, which is what relative links in the page are relative to.
+func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body string) ([]byte, string, error) {
 	key := method + " " + url + " " + body
 	f.mu.Lock()
 	p, ok := f.pages[key]
 	f.mu.Unlock()
 	if ok && time.Since(p.at) < pageTTL {
-		return p.body, nil
+		return p.body, p.url, nil
 	}
 
-	data, ctype, err := f.do(ctx, src, method, url, body, maxPageBytes)
+	data, ctype, final, err := f.do(ctx, src, method, url, body, maxPageBytes)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if src.Charset != "" {
 		ctype = "text/html; charset=" + src.Charset
@@ -128,13 +132,13 @@ func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body strin
 			}
 		}
 	}
-	f.pages[key] = page{data, time.Now()}
+	f.pages[key] = page{data, final, time.Now()}
 	f.mu.Unlock()
-	return data, nil
+	return data, final, nil
 }
 
 // Image fetches a binary resource with the source's headers (Referer anti-hotlinking).
 func (f *Fetcher) Image(ctx context.Context, src *Source, url string) ([]byte, error) {
-	data, _, err := f.do(ctx, src, http.MethodGet, url, "", maxImgBytes)
+	data, _, _, err := f.do(ctx, src, http.MethodGet, url, "", maxImgBytes)
 	return data, err
 }

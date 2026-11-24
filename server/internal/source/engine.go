@@ -38,12 +38,15 @@ type Content struct {
 
 type Engine struct{ Fetcher *Fetcher }
 
-func (e *Engine) load(ctx context.Context, src *Source, method, u, body string) (Node, error) {
-	data, err := e.Fetcher.Page(ctx, src, method, u, body)
+// load returns the parsed page and its final URL after redirects; relative links in the page
+// must be resolved against that URL rather than the requested one.
+func (e *Engine) load(ctx context.Context, src *Source, method, u, body string) (Node, string, error) {
+	data, final, err := e.Fetcher.Page(ctx, src, method, u, body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return parseDoc(data)
+	doc, err := parseDoc(data)
+	return doc, final, err
 }
 
 func (e *Engine) Search(ctx context.Context, src *Source, key string, page int) ([]BookInfo, error) {
@@ -56,7 +59,7 @@ func (e *Engine) Search(ctx context.Context, src *Source, key string, page int) 
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		u = src.BaseURL + "/" + strings.TrimPrefix(u, "/")
 	}
-	doc, err := e.load(ctx, src, src.Search.Method, u, fill.Replace(src.Search.Body))
+	doc, u, err := e.load(ctx, src, src.Search.Method, u, fill.Replace(src.Search.Body))
 	if err != nil {
 		return nil, err
 	}
@@ -84,17 +87,17 @@ func (e *Engine) Detail(ctx context.Context, src *Source, bookURL string) (BookI
 	if r == (DetailRule{}) {
 		return b, nil
 	}
-	doc, err := e.load(ctx, src, "", bookURL, "")
+	doc, base, err := e.load(ctx, src, "", bookURL, "")
 	if err != nil {
 		return b, err
 	}
 	b.Title = first(doc, r.Title)
 	b.Author = first(doc, r.Author)
-	b.Cover = resolve(bookURL, first(doc, r.Cover))
+	b.Cover = resolve(base, first(doc, r.Cover))
 	b.Intro = first(doc, r.Intro)
 	b.Latest = first(doc, r.Latest)
 	if toc := first(doc, r.TocURL); toc != "" {
-		b.TocURL = resolve(bookURL, toc)
+		b.TocURL = resolve(base, toc)
 	}
 	return b, nil
 }
@@ -104,17 +107,17 @@ func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]Chapter
 	seen := map[string]bool{}
 	for u, n := tocURL, 0; u != "" && !seen[u] && n < maxTocPages; n++ {
 		seen[u] = true
-		doc, err := e.load(ctx, src, "", u, "")
+		doc, base, err := e.load(ctx, src, "", u, "")
 		if err != nil {
 			return nil, err
 		}
 		for _, item := range doc.Find(src.Toc.List) {
-			c := ChapterInfo{Title: first(item, src.Toc.Name), URL: resolve(u, first(item, src.Toc.URL))}
+			c := ChapterInfo{Title: first(item, src.Toc.Name), URL: resolve(base, first(item, src.Toc.URL))}
 			if c.URL != "" {
 				out = append(out, c)
 			}
 		}
-		u = resolve(u, first(doc, src.Toc.NextPage))
+		u = resolve(base, first(doc, src.Toc.NextPage))
 	}
 	if len(out) == 0 {
 		return nil, errors.New("目录为空，请检查 toc 规则")
@@ -134,13 +137,13 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 	seen := map[string]bool{stopURL: true}
 	for u, n := chapterURL, 0; u != "" && !seen[u] && n < maxContentPages; n++ {
 		seen[u] = true
-		doc, err := e.load(ctx, src, "", u, "")
+		doc, base, err := e.load(ctx, src, "", u, "")
 		if err != nil {
 			return c, err
 		}
 		if src.Type == TypeComic {
 			for _, img := range doc.Values(src.Content.Images) {
-				c.Images = append(c.Images, resolve(u, img))
+				c.Images = append(c.Images, resolve(base, img))
 			}
 		} else {
 			body := src.Content.Body
@@ -149,7 +152,7 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 			}
 			text = append(text, doc.Values(body)...)
 		}
-		u = resolve(u, first(doc, src.Content.NextPage))
+		u = resolve(base, first(doc, src.Content.NextPage))
 	}
 	if src.Type == TypeComic {
 		if len(c.Images) == 0 {

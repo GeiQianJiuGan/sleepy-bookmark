@@ -37,3 +37,24 @@ func TestJSONNovelBodyWithoutPrefix(t *testing.T) {
 		t.Fatalf("content: %q, %v", c.Text, err)
 	}
 }
+
+func TestRelativeLinksFollowRedirects(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/book/1", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/book/1/", http.StatusMovedPermanently)
+	})
+	mux.HandleFunc("/book/1/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><div id="list"><a href="1.html">one</a></div></body></html>`))
+	})
+	e, src := site(t, mux)
+
+	toc, err := e.Toc(context.Background(), src, src.BaseURL+"/book/1")
+	if err != nil || len(toc) != 1 || toc[0].URL != src.BaseURL+"/book/1/1.html" {
+		t.Fatalf("toc: %+v, %v", toc, err)
+	}
+	// The second read comes from the page cache and must resolve the same way.
+	toc, err = e.Toc(context.Background(), src, src.BaseURL+"/book/1")
+	if err != nil || toc[0].URL != src.BaseURL+"/book/1/1.html" {
+		t.Fatalf("cached toc: %+v, %v", toc, err)
+	}
+}
