@@ -28,6 +28,8 @@ const open = (b: OfflineBook) => uni.navigateTo({ url: `/pages/reader/reader?boo
 function remove(b: OfflineBook) {
   uni.showModal({
     title: `删除《${b.book.title}》的离线内容？`,
+    confirmText: '删除',
+    cancelText: '取消',
     success: ({ confirm }) => {
       if (!confirm) return
       removeOfflineBook(b.book.id)
@@ -96,7 +98,7 @@ function remove(b: OfflineBook) {
   align-items: center;
   padding: 24rpx 32rpx;
   background: #fff;
-  border-bottom: 1rpx solid #f0f0f0;
+  border-bottom: 1rpx solid var(--line);
 
   .main {
     flex: 1;

@@ -6,7 +6,7 @@ export const THEMES = {
   light: { name: '白天', bg: '#ffffff', fg: '#222222' },
   sepia: { name: '护眼', bg: '#f4ecd8', fg: '#4a3b2a' },
   green: { name: '青草', bg: '#cce8cf', fg: '#2b3a2e' },
-  dark: { name: '夜间', bg: '#1a1a1a', fg: '#9a9a9a' },
+  dark: { name: '夜间', bg: '#1a1a1a', fg: '#a8a8a8' },
 } as const
 
 export type Theme = keyof typeof THEMES

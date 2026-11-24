@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Book } from '@/api'
-import { absoluteUrl } from '@/api/http'
+import BookCover from './BookCover.vue'
 
 const props = defineProps<{ book: Book; showIntro?: boolean }>()
 
@@ -14,8 +14,7 @@ const subtitle = computed(() => {
 
 <template>
   <view class="book">
-    <image v-if="book.cover" class="cover" :src="absoluteUrl(book.cover)" mode="aspectFill" lazy-load />
-    <view v-else class="cover placeholder">{{ book.title.slice(0, 1) }}</view>
+    <view class="cover"><BookCover :book="book" /></view>
     <view class="info">
       <view class="title ellipsis">{{ book.title }}</view>
       <view class="muted ellipsis">{{ book.author || '未知作者' }} · {{ book.sourceName }}</view>
@@ -28,25 +27,15 @@ const subtitle = computed(() => {
 <style lang="scss" scoped>
 .book {
   display: flex;
+  margin: 0 24rpx 20rpx;
   padding: 24rpx;
+  border-radius: 16rpx;
   background: #fff;
-  border-bottom: 1rpx solid #f0f0f0;
 }
 
 .cover {
   flex: none;
   width: 140rpx;
-  height: 186rpx;
-  border-radius: 8rpx;
-  background: #eee;
-}
-
-.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 56rpx;
-  color: #bbb;
 }
 
 .info {
@@ -68,5 +57,6 @@ const subtitle = computed(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  line-height: 1.5;
 }
 </style>

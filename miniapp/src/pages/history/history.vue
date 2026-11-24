@@ -35,6 +35,8 @@ function remove(b?: Book) {
   uni.showModal({
     title: b ? `删除《${b.title}》的浏览记录？` : '清空全部浏览记录？',
     content: b ? '' : '小说和漫画的记录都会被清空',
+    confirmText: b ? '删除' : '清空',
+    cancelText: '取消',
     success: async ({ confirm }) => {
       if (!confirm) return
       try {

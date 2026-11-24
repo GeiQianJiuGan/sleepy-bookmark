@@ -77,6 +77,8 @@ function remove() {
   uni.showModal({
     title: '删除这个书源？',
     content: '来自该书源的书架、历史和缓存也会一并删除',
+    confirmText: '删除',
+    cancelText: '取消',
     success: ({ confirm }) => {
       if (!confirm) return
       run(async () => {

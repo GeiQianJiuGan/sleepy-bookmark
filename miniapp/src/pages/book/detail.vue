@@ -21,6 +21,7 @@ const alternatives = ref<Book[] | null>(null)
 const switching = ref(false)
 let openSwitch = false
 const reversed = ref(false)
+const introOpen = ref(false)
 const shown = ref(PAGE)
 const downloaded = ref<Record<number, unknown>>({})
 const downloading = ref('')
@@ -176,7 +177,9 @@ async function download() {
         <view v-if="book.progress" class="muted ellipsis">读到：{{ book.progress.chapterTitle }}</view>
       </view>
     </view>
-    <view v-if="book.intro" class="intro">{{ book.intro }}</view>
+    <view v-if="book.intro" class="intro" :class="{ folded: !introOpen }" @click="introOpen = !introOpen">
+      {{ book.intro }}
+    </view>
 
     <view class="actions">
       <wd-button size="small" :disabled="!chapters.length" @click="read()">{{ book.progress ? '继续阅读' : '开始阅读' }}</wd-button>
@@ -242,10 +245,19 @@ async function download() {
 }
 
 .intro {
-  padding: 0 32rpx 24rpx;
+  padding: 0 32rpx;
+  border-bottom: 24rpx solid #fff;
   background: #fff;
   color: #555;
   line-height: 1.7;
+
+  // Long introductions show three lines until tapped.
+  &.folded {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
 }
 
 .actions {
@@ -274,7 +286,7 @@ async function download() {
   justify-content: space-between;
   padding: 24rpx 32rpx;
   background: #fff;
-  border-bottom: 1rpx solid #f0f0f0;
+  border-bottom: 1rpx solid var(--line);
 
   .ellipsis {
     flex: 1;

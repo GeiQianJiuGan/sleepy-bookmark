@@ -14,9 +14,12 @@ page {
   --brand: #c0392b;
   --paper: #f6f3ee;
   --line: #efeae2;
+  // wot-design-uni takes its accent from this variable.
+  --wot-color-theme: #c0392b;
   background: var(--paper);
   color: #2b2622;
   font-size: 28rpx;
+  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
 }
 
 .link {

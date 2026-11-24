@@ -61,8 +61,7 @@ function more(b: Book) {
 }
 
 function caption(b: Book): string {
-  if (b.progress?.chapterTitle) return b.progress.chapterTitle
-  return b.latest || '未读'
+  return b.progress?.chapterTitle || '未读'
 }
 </script>
 

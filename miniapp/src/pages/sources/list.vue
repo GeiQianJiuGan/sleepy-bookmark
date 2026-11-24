@@ -60,7 +60,7 @@ const edit = (id?: number) => uni.navigateTo({ url: '/pages/sources/edit' + (id 
   align-items: center;
   padding: 24rpx 32rpx;
   background: #fff;
-  border-bottom: 1rpx solid #f0f0f0;
+  border-bottom: 1rpx solid var(--line);
 }
 
 .main {

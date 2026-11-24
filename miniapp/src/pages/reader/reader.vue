@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, getCurrentInstance, nextTick, ref } from 'vue'
-import { onHide, onLoad, onPageScroll, onReachBottom, onUnload } from '@dcloudio/uni-app'
+import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
+import { onHide, onLoad, onPageScroll, onReachBottom, onReady, onUnload } from '@dcloudio/uni-app'
 import { api, type Chapter, type ChapterContent } from '@/api'
 import { absoluteUrl, errorText, sourceDown } from '@/api/http'
 import { THEMES, useAppStore, type Theme } from '@/stores/app'
@@ -18,6 +18,16 @@ const store = useAppStore()
 const instance = getCurrentInstance()
 const theme = computed(() => THEMES[store.reader.theme])
 const themeNames = Object.keys(THEMES) as Theme[]
+
+// The navigation bar takes the page colour so the reader is one surface.
+function paintBar() {
+  uni.setNavigationBarColor({
+    frontColor: store.reader.theme === 'dark' ? '#ffffff' : '#000000',
+    backgroundColor: theme.value.bg,
+  })
+}
+onReady(paintBar)
+watch(theme, paintBar)
 
 let bookId = 0
 const isComic = ref(false)
@@ -328,7 +338,8 @@ function resize(delta: number) {
   .reason {
     margin: 12rpx 40rpx 32rpx;
     font-size: 24rpx;
-    opacity: 0.6;
+    line-height: 1.6;
+    opacity: 0.85;
   }
 }
 
@@ -374,7 +385,7 @@ function resize(delta: number) {
 
 .catalog-item {
   padding: 24rpx 32rpx;
-  border-bottom: 1rpx solid #f0f0f0;
+  border-bottom: 1rpx solid var(--line);
 
   &.current {
     color: var(--brand);
