@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"errors"
+	"fmt"
 	"html"
 	"net/url"
 	"regexp"
@@ -105,7 +106,10 @@ func (e *Engine) Detail(ctx context.Context, src *Source, bookURL string) (BookI
 func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]ChapterInfo, error) {
 	var out []ChapterInfo
 	seen := map[string]bool{}
-	for u, n := tocURL, 0; u != "" && !seen[u] && n < maxTocPages; n++ {
+	for u, n := tocURL, 0; u != "" && !seen[u]; n++ {
+		if n == maxTocPages {
+			return nil, fmt.Errorf("目录超过 %d 页，无法读完", maxTocPages)
+		}
 		seen[u] = true
 		doc, base, err := e.load(ctx, src, "", u, "")
 		if err != nil {
@@ -135,7 +139,10 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 	var c Content
 	var text []string
 	seen := map[string]bool{stopURL: true}
-	for u, n := chapterURL, 0; u != "" && !seen[u] && n < maxContentPages; n++ {
+	for u, n := chapterURL, 0; u != "" && !seen[u]; n++ {
+		if n == maxContentPages {
+			return c, fmt.Errorf("一章超过 %d 页，请检查 content.nextPage 规则", maxContentPages)
+		}
 		seen[u] = true
 		doc, base, err := e.load(ctx, src, "", u, "")
 		if err != nil {

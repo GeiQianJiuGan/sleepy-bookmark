@@ -2,8 +2,10 @@ package source_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
@@ -76,5 +78,27 @@ func TestPageCacheIsPerHeadersAndCharset(t *testing.T) {
 	}
 	if a, b := read("first"), read("second"); a != "first" || b != "second" {
 		t.Fatalf("got %q then %q", a, b)
+	}
+}
+
+// A catalog or chapter with more pages than the engine follows is an error, not a short result
+// that would be cached as if it were complete.
+func TestTooManyPagesIsAnError(t *testing.T) {
+	mux := http.NewServeMux()
+	page := func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("p"))
+		fmt.Fprintf(w, `<div id="list"><a href="/c/%d">c%d</a></div><div id="content">text %d</div><a id="next" href="?p=%d">next</a>`, n, n, n, n+1)
+	}
+	mux.HandleFunc("/toc", page)
+	mux.HandleFunc("/chapter", page)
+	e, src := site(t, mux)
+	src.Toc.NextPage = "css:#next@href"
+	src.Content.NextPage = "css:#next@href"
+
+	if toc, err := e.Toc(context.Background(), src, src.BaseURL+"/toc"); err == nil {
+		t.Fatalf("toc: got %d chapters and no error", len(toc))
+	}
+	if c, err := e.Content(context.Background(), src, src.BaseURL+"/chapter", ""); err == nil {
+		t.Fatalf("content: got %d bytes and no error", len(c.Text))
 	}
 }
