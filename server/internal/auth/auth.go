@@ -97,15 +97,22 @@ func (a *Auth) mayRegister(openid string) bool {
 	return err == nil && n == 0
 }
 
+var wxSessionURL = "https://api.weixin.qq.com/sns/jscode2session"
+
 func (a *Auth) code2Session(ctx context.Context, code string) (string, error) {
 	if a.cfg.WXAppID == "" || a.cfg.WXSecret == "" {
 		return "", errors.New("服务端未配置 WX_APPID / WX_SECRET")
 	}
 	q := url.Values{"appid": {a.cfg.WXAppID}, "secret": {a.cfg.WXSecret}, "js_code": {code}, "grant_type": {"authorization_code"}}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.weixin.qq.com/sns/jscode2session?"+q.Encode(), nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, wxSessionURL+"?"+q.Encode(), nil)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return "", err
+		// A *url.Error prints the request URL, which contains the app secret.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return "", fmt.Errorf("无法连接微信服务器：%w", err)
 	}
 	defer resp.Body.Close()
 	var out struct {
