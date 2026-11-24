@@ -509,3 +509,32 @@ func TestAChapterOfOnePictureIsRead(t *testing.T) {
 		t.Fatalf("images = %v (%v), want the one strip", c.Images, err)
 	}
 }
+
+func TestTheRestOfAChapterThatRedirectsIsRead(t *testing.T) {
+	part := func(text, next string) string {
+		return `<div id="content">` + strings.Repeat("<p>"+text+"，这一段是正文的内容，写得足够长，才认得出是正文。</p>", 6) +
+			`</div><div class="pager"><a href="` + next + `">下一页</a></div>`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/book/7/12.html":
+			http.Redirect(w, r, "/read/7/c12.html", http.StatusFound)
+		case "/read/7/c12.html":
+			fmt.Fprintf(w, frame, "", part("第一页", "/read/7/c12_2.html"))
+		case "/read/7/c12_2.html":
+			fmt.Fprintf(w, frame, "", part("第二页", "/read/7/c13.html"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	src := &source.Source{Name: "章节会跳转", Type: source.TypeNovel, BaseURL: srv.URL, RateLimitMs: 1}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	c, err := e.Content(context.Background(), src, srv.URL+"/book/7/12.html", srv.URL+"/book/7/13.html")
+	if err != nil || !strings.Contains(c.Text, "第一页") || !strings.Contains(c.Text, "第二页") {
+		t.Fatalf("text = %q (%v), want both pages", c.Text, err)
+	}
+}

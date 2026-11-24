@@ -355,6 +355,9 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 	var c Content
 	var text []string
 	seen := map[string]bool{stopURL: true}
+	// start is where the chapter is once a redirect is followed: its other pages are addressed
+	// like that, not like the link in the catalog.
+	start := chapterURL
 	for u, n := chapterURL, 0; u != "" && !seen[u]; n++ {
 		if n == maxContentPages {
 			return c, RuleError(fmt.Sprintf("一章超过 %d 页，请检查 content.nextPage 规则", maxContentPages))
@@ -369,6 +372,9 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 			break
 		}
 		seen[base] = true
+		if n == 0 {
+			start = base
+		}
 		sel, _ := markup(doc)
 		auto := isAuto(src.Content.Body) || isAuto(src.Content.Images)
 		switch {
@@ -396,7 +402,7 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 		if !isAuto(src.Content.NextPage) {
 			u = resolve(base, first(doc, src.Content.NextPage))
 		} else if u = ""; sel != nil {
-			u = autoNextPart(sel, base, chapterURL)
+			u = autoNextPart(sel, base, start)
 		}
 	}
 	if src.Type == TypeComic {
