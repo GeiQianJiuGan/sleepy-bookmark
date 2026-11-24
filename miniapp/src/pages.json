@@ -14,7 +14,9 @@
     { "path": "pages/history/history", "style": { "navigationBarTitleText": "浏览历史", "navigationStyle": "custom", "enablePullDownRefresh": true } },
     { "path": "pages/sources/list", "style": { "navigationBarTitleText": "书源管理" } },
     { "path": "pages/sources/edit", "style": { "navigationBarTitleText": "编辑书源" } },
-    { "path": "pages/downloads/downloads", "style": { "navigationBarTitleText": "下载与缓存" } }
+    { "path": "pages/downloads/downloads", "style": { "navigationBarTitleText": "下载与缓存" } },
+    { "path": "pages/login/login", "style": { "navigationBarTitleText": "登录", "navigationStyle": "custom" } },
+    { "path": "pages/login/privacy", "style": { "navigationBarTitleText": "用户协议与隐私政策" } }
   ],
   "tabBar": {
     "color": "#8a8a8a",

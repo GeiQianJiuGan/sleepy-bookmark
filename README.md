@@ -75,6 +75,7 @@ docker compose up -d --build
 
 ## 功能
 
+- 登录：启动时本机有 refresh token 就换新 token，没有或已失效就进登录页；登录页先弹《用户协议与隐私政策》，同意后才调用微信登录；「我的」里可以退出登录、查看政策和撤回同意
 - 左上角的图标在小说 / 漫画之间整体切换，书架、搜索、历史都按当前模式过滤
 - 书源管理：新增、批量导入、编辑、启停、删除、在线测试
 - 多书源并发搜索，可以只搜某一个书源；搜索框右侧的按钮展开高级选项，可选模糊（默认，按书名相关度排序）或精确（书名完全一致）
@@ -95,11 +96,12 @@ docker compose up -d --build
 
 ## 接口
 
-除 `/api/health`、`/api/auth/login`、`/api/img` 外都需要 `Authorization: Bearer <token>`。
+除 `/api/health`、`/api/auth/login`、`/api/auth/refresh`、`/api/img` 外都需要 `Authorization: Bearer <token>`。
 
 | 接口 | 说明 |
 |---|---|
-| `POST /api/auth/login` | `{code}` 换 token |
+| `POST /api/auth/login` | `{code}` 换 `{token, refreshToken, expiresIn}`。`token` 有效 2 小时，`refreshToken` 有效 30 天 |
+| `POST /api/auth/refresh` | `{refreshToken}` 换一组新的 token；返回 401 表示需要重新登录 |
 | `GET /api/img?s=&u=&sig=` | 图片代理，地址由后端签名生成 |
 | `GET/POST /api/sources`，`PUT/DELETE /api/sources/:id` | 书源管理 |
 | `PUT /api/sources/:id/enabled` | 启停 |

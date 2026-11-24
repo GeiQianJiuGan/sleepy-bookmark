@@ -34,6 +34,7 @@ func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *ec
 	api := e.Group("/api")
 	api.GET("/health", func(c echo.Context) error { return c.JSON(http.StatusOK, echo.Map{"ok": true}) })
 	api.POST("/auth/login", s.login)
+	api.POST("/auth/refresh", s.refresh)
 	api.GET("/img", s.image)
 
 	g := api.Group("", a.Middleware)
@@ -111,11 +112,26 @@ func (s *Server) login(c echo.Context) error {
 	if err := c.Bind(&in); err != nil || in.Code == "" {
 		return badRequest("缺少 code")
 	}
-	token, err := s.auth.Login(c.Request().Context(), in.Code)
+	session, err := s.auth.Login(c.Request().Context(), in.Code)
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, echo.Map{"token": token})
+	return c.JSON(http.StatusOK, session)
+}
+
+// refresh renews a session without another wx.login. 401 means the client has to log in again.
+func (s *Server) refresh(c echo.Context) error {
+	var in struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := c.Bind(&in); err != nil || in.RefreshToken == "" {
+		return badRequest("缺少 refreshToken")
+	}
+	session, err := s.auth.Refresh(in.RefreshToken)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+	}
+	return c.JSON(http.StatusOK, session)
 }
 
 func (s *Server) image(c echo.Context) error {

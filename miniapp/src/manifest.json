@@ -13,6 +13,7 @@
       "minified": true
     },
     "usingComponents": true,
+    "__usePrivacyCheck__": true,
     "lazyCodeLoading": "requiredComponents"
   },
   "h5": {
