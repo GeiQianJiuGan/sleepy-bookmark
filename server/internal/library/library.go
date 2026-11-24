@@ -479,8 +479,11 @@ func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) 
 	if err != nil {
 		return err
 	}
-	// The most recent reading position wins: a newer bookmark in the destination stays.
-	if p := from.Progress; p != nil && len(chapters) > 0 && (to.Progress == nil || to.Progress.UpdatedAt <= p.UpdatedAt) {
+	// The most recent reading position wins: a newer bookmark in the destination stays, as long
+	// as the chapter it points at is still in the catalog.
+	keep := to.Progress != nil && from.Progress != nil && to.Progress.UpdatedAt > from.Progress.UpdatedAt &&
+		slices.ContainsFunc(chapters, func(c *store.Chapter) bool { return c.ID == to.Progress.ChapterID })
+	if p := from.Progress; p != nil && len(chapters) > 0 && !keep {
 		// Same title, and if several chapters have it, the one nearest to the old position;
 		// without a title match, the chapter at the old position.
 		target := chapters[min(p.ChapterIdx, len(chapters)-1)]
