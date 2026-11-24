@@ -16,6 +16,8 @@ const kind = computed(() => (store.mode === 'novel' ? '小说' : '漫画'))
 const sources = ref<Source[]>([])
 const sourceId = ref(0)
 const exact = ref(false)
+// The match mode sits in a panel that opens from the button next to the search box.
+const showOptions = ref(false)
 const sourceName = computed(() => sources.value.find((s) => s.id === sourceId.value)?.name || '全部书源')
 
 // Before a search the page shows what each source recommends, in the order of the sources.
@@ -139,33 +141,46 @@ watch(
 <template>
   <view>
     <AppBar title="搜索" />
-    <wd-search
-      v-model="keyword"
-      hide-cancel
-      custom-style="background: transparent; --wot-search-input-bg: #fff"
-      :placeholder="exact ? `精确搜索：完整的${kind}名` : `搜索${kind}：名称 / 作者`"
-      @search="search"
-      @clear="reset"
-    />
-
-    <view class="filters">
-      <scroll-view class="chips" scroll-x :show-scrollbar="false">
-        <view class="chip" :class="{ active: !sourceId }" @click="pickSource(0)">全部书源</view>
-        <view
-          v-for="s in sources"
-          :key="s.id"
-          class="chip"
-          :class="{ active: sourceId === s.id }"
-          @click="pickSource(s.id)"
-        >
-          {{ s.name }}
-        </view>
-      </scroll-view>
-      <view class="match">
-        <view class="option" :class="{ active: !exact }" @click="setExact(false)">模糊</view>
-        <view class="option" :class="{ active: exact }" @click="setExact(true)">精确</view>
+    <view class="search-row">
+      <wd-search
+        v-model="keyword"
+        hide-cancel
+        custom-style="flex: 1; padding-right: 0; background: transparent; --wot-search-input-bg: #fff"
+        :placeholder="exact ? `精确搜索：完整的${kind}名` : `搜索${kind}：名称 / 作者`"
+        @search="search"
+        @clear="reset"
+      />
+      <view class="more" :class="{ open: showOptions, on: exact }" @click="showOptions = !showOptions">
+        <view class="slider" />
+        <view class="slider low" />
       </view>
     </view>
+
+    <view v-if="showOptions" class="options">
+      <view class="row">
+        <view class="label">匹配方式</view>
+        <view class="match">
+          <view class="option" :class="{ active: !exact }" @click="setExact(false)">模糊</view>
+          <view class="option" :class="{ active: exact }" @click="setExact(true)">精确</view>
+        </view>
+      </view>
+      <view class="muted">
+        {{ exact ? `只显示${kind}名和关键词完全一致的结果` : `${kind}名或作者包含关键词，按相关度排序` }}
+      </view>
+    </view>
+
+    <scroll-view class="chips" scroll-x :show-scrollbar="false">
+      <view class="chip" :class="{ active: !sourceId }" @click="pickSource(0)">全部书源</view>
+      <view
+        v-for="s in sources"
+        :key="s.id"
+        class="chip"
+        :class="{ active: sourceId === s.id }"
+        @click="pickSource(s.id)"
+      >
+        {{ s.name }}
+      </view>
+    </scroll-view>
 
     <template v-if="searching">
       <LoadState v-if="loading || error" :loading="loading" :error="error" @retry="search" />
@@ -240,15 +255,87 @@ watch(
 </template>
 
 <style lang="scss" scoped>
-.filters {
+.search-row {
   display: flex;
   align-items: center;
-  padding: 4rpx 24rpx 20rpx;
+}
+
+// Two slider lines with a knob each; the knobs fill in while exact matching is on.
+.more {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 68rpx;
+  height: 68rpx;
+  margin: 0 24rpx 0 16rpx;
+  padding: 0 16rpx;
+  box-sizing: border-box;
+  color: #8a8178;
+  border-radius: 34rpx;
+  background: #fff;
+
+  &.on,
+  &.open {
+    color: var(--brand);
+  }
+
+  &.open {
+    background: #f6e3df;
+  }
+}
+
+.slider {
+  position: relative;
+  height: 4rpx;
+  margin: 7rpx 0;
+  border-radius: 2rpx;
+  background: currentColor;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: -5rpx;
+    left: 4rpx;
+    width: 10rpx;
+    height: 10rpx;
+    border: 3rpx solid currentColor;
+    border-radius: 50%;
+    background: #fff;
+  }
+
+  &.low::after {
+    left: auto;
+    right: 4rpx;
+  }
+}
+
+.more.on .slider::after {
+  background: currentColor;
+}
+
+.options {
+  margin: 0 24rpx 20rpx;
+  padding: 20rpx 28rpx 24rpx;
+  border-radius: 20rpx;
+  background: #fff;
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12rpx;
+  }
+
+  .label {
+    font-size: 28rpx;
+  }
 }
 
 .chips {
-  flex: 1;
-  width: 0;
+  width: auto;
+  margin: 0 24rpx;
+  padding: 4rpx 0 20rpx;
   white-space: nowrap;
 }
 
@@ -273,9 +360,7 @@ watch(
 }
 
 .match {
-  flex: none;
   display: flex;
-  margin-left: 12rpx;
   padding: 4rpx;
   border-radius: 28rpx;
   background: #ebe6de;
