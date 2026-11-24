@@ -42,7 +42,7 @@ const edit = (id?: number) => uni.navigateTo({ url: '/pages/sources/edit' + (id 
         </view>
         <view class="muted ellipsis">{{ s.rule.baseUrl }}</view>
         <view v-if="s.health" class="health ellipsis">
-          {{ s.health.pausedUntil * 1000 > Date.now() ? '连续无法访问，搜索时暂时跳过' : '最近一次访问失败' }}：{{ s.health.lastError }}
+          {{ s.health.pausedUntil * 1000 > Date.now() ? '搜索连续失败，暂时跳过' : '最近一次搜索失败' }}：{{ s.health.lastError }}
         </view>
       </view>
       <wd-switch :model-value="s.enabled" size="20px" @change="toggle(s, $event.value)" />

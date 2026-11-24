@@ -150,7 +150,6 @@ func (l *Library) Book(ctx context.Context, id int64) (*store.Book, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	info, err := l.engine.Detail(ctx, src, b.URL)
-	l.health.note(b.SourceID, err)
 	if err != nil {
 		// The search result is still usable without the detail page.
 		log.Printf("detail %q: %v", b.Title, err)
@@ -202,7 +201,6 @@ func (l *Library) refreshToc(ctx context.Context, b *store.Book) ([]*store.Chapt
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
 		toc, err := l.engine.Toc(ctx, src, pick(b.TocURL, b.URL))
-		l.health.note(b.SourceID, err)
 		if err != nil {
 			return nil, err
 		}
@@ -302,7 +300,6 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 			stop = next.URL
 		}
 		c, err := l.engine.Content(ctx, src, ch.URL, stop)
-		l.health.note(b.SourceID, err)
 		if err != nil {
 			return nil, err
 		}

@@ -16,7 +16,7 @@ const (
 	pauseFor   = 10 * time.Minute
 )
 
-// Health is what the server remembers, in memory, about a source that keeps failing.
+// Health is what the server remembers, in memory, about a source whose search keeps failing.
 type Health struct {
 	Failures    int    `json:"failures"`
 	LastError   string `json:"lastError"`
@@ -29,8 +29,9 @@ type healthBook struct {
 	m  map[int64]*Health
 }
 
-// note records the outcome of a request to a source. Only failures of the site itself count:
-// a missing page or a rule that matches nothing says nothing about the rest of the source.
+// note records the outcome of a search in a source. Only searches are counted, because the
+// pause applies to searches: a chapter the site refuses to serve says nothing about its search
+// page. Of the failures only those of the site itself count, not a rule that matches nothing.
 func (h *healthBook) note(sourceID int64, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
