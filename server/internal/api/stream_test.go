@@ -105,3 +105,30 @@ func (forever) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+func TestStreamRulesRejectsADocumentThatDoesNotEnd(t *testing.T) {
+	rule := `{"name":"a","type":"novel","baseUrl":"https://example.com"}`
+	for _, doc := range []string{
+		`{"sources":[` + rule + `]`,
+		`[` + rule + `] x`,
+		`[` + rule + `][`,
+		`{"sources":[` + rule + `]} {}`,
+		rule + ` 1`,
+	} {
+		if rules, _, err := streamRules(strings.NewReader(doc)); err == nil {
+			t.Errorf("%q: read as %d rules", doc, len(rules))
+		}
+	}
+	for _, doc := range []string{`[` + rule + `]` + " \n", `{"sources":[` + rule + `]}` + "\n"} {
+		if rules, _, err := streamRules(strings.NewReader(doc)); err != nil || len(rules) != 1 {
+			t.Errorf("%q: %d rules, %v", doc, len(rules), err)
+		}
+	}
+}
+
+func TestStreamRulesBoundsTheNumberOfRules(t *testing.T) {
+	doc := "[" + strings.Repeat("0,", maxListRules) + "0]"
+	if _, _, err := streamRules(strings.NewReader(doc)); !errors.Is(err, errTooMany) {
+		t.Fatalf("err: %v", err)
+	}
+}

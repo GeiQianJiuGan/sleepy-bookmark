@@ -113,9 +113,15 @@ func parseRuleList(raws []json.RawMessage) ([]*source.Source, []skipped) {
 // maxRule bounds one rule of a streamed list; the list itself may be of any size.
 const maxRule = 1 << 20
 
+// maxListRules bounds how many rules of one list are read: the rules that are kept are what a
+// list costs in memory, and whoever publishes it decides how many there are.
+const maxListRules = 50000
+
 var (
 	errNotRules = errors.New("not a rule list")
 	errRuleSize = errors.New("rule too large")
+	errTooMany  = errors.New("too many rules")
+	errTrailing = errors.New("content after the end of the document")
 )
 
 // metered fails a read once more than left bytes were read since it was last reset: the decoder
@@ -168,6 +174,9 @@ func streamRules(r io.Reader) ([]*source.Source, []skipped, error) {
 	}
 	elements := func() error {
 		for more() {
+			if list.n == maxListRules {
+				return errTooMany
+			}
 			var raw json.RawMessage
 			if err := dec.Decode(&raw); err != nil {
 				return err
@@ -177,12 +186,28 @@ func streamRules(r io.Reader) ([]*source.Source, []skipped, error) {
 		_, err := dec.Token()
 		return err
 	}
+	// end reads to the end of the input: a document that is cut short or followed by something
+	// else is not one to import half of.
+	end := func() error {
+		m.left = 4 * maxRule
+		switch _, err := dec.Token(); err {
+		case io.EOF:
+			return nil
+		case nil:
+			return errTrailing
+		default:
+			return err
+		}
+	}
 	open, err := dec.Token()
 	if err != nil {
 		return nil, nil, err
 	}
 	if open == json.Delim('[') {
 		if err := elements(); err != nil {
+			return nil, nil, err
+		}
+		if err := end(); err != nil {
 			return nil, nil, err
 		}
 		return list.rules, list.left, nil
@@ -245,6 +270,12 @@ func streamRules(r io.Reader) ([]*source.Source, []skipped, error) {
 		fields.WriteByte(':')
 		fields.Write(raw)
 	}
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, err
+	}
+	if err := end(); err != nil {
+		return nil, nil, err
+	}
 	if !bundle {
 		list.add(json.RawMessage("{" + fields.String() + "}"))
 	}
@@ -278,6 +309,10 @@ func fetchRules(ctx context.Context, u string) ([]*source.Source, []skipped, err
 		return nil, nil, badRequest("订阅地址返回的不是书源列表（JSON）。GitHub 上的文件请用它的 Raw 地址")
 	case errors.Is(err, errRuleSize):
 		return nil, nil, badRequest("订阅里有一个书源超过 1 MB，无法读取")
+	case errors.Is(err, errTooMany):
+		return nil, nil, badRequest(fmt.Sprintf("订阅里的书源超过 %d 个，请拆成几份分别订阅", maxListRules))
+	case errors.Is(err, errTrailing):
+		return nil, nil, badRequest("JSON 格式错误：书源列表结束后还有多余的内容")
 	case isSyntax(err):
 		return nil, nil, badRequest("JSON 格式错误：" + err.Error())
 	case err != nil:
