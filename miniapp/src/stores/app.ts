@@ -45,5 +45,9 @@ export const useAppStore = defineStore('app', () => {
   })
   watch(reader, (r) => uni.setStorageSync('reader', { ...r }), { deep: true })
 
-  return { mode, reader }
+  /** Data saver: lists and book pages show the title instead of fetching the cover. */
+  const dataSaver = ref(!!uni.getStorageSync('dataSaver'))
+  watch(dataSaver, (on) => uni.setStorageSync('dataSaver', on))
+
+  return { mode, reader, dataSaver }
 })

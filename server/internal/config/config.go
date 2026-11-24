@@ -8,7 +8,11 @@ import (
 )
 
 type Config struct {
-	Addr            string
+	Addr string
+	// TLSAddr, with TLSCert and TLSKey, adds an HTTPS listener next to the plain one on Addr.
+	TLSAddr         string
+	TLSCert         string
+	TLSKey          string
 	DataDir         string
 	JWTSecret       string
 	WXAppID         string
@@ -29,6 +33,9 @@ type Config struct {
 func Load() Config {
 	c := Config{
 		Addr:            env("ADDR", ":8080"),
+		TLSAddr:         os.Getenv("TLS_ADDR"),
+		TLSCert:         os.Getenv("TLS_CERT"),
+		TLSKey:          os.Getenv("TLS_KEY"),
 		DataDir:         env("DATA_DIR", "./data"),
 		JWTSecret:       os.Getenv("JWT_SECRET"),
 		WXAppID:         os.Getenv("WX_APPID"),

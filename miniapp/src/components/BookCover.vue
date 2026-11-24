@@ -2,8 +2,10 @@
 import { ref, watch } from 'vue'
 import type { Book } from '@/api'
 import { absoluteUrl } from '@/api/http'
+import { useAppStore } from '@/stores/app'
 
 const props = defineProps<{ book: Pick<Book, 'title' | 'cover'> }>()
+const store = useAppStore()
 // A cover that fails to load (dead image link) falls back to the title card.
 const broken = ref(false)
 watch(
@@ -15,7 +17,7 @@ watch(
 <template>
   <view class="cover">
     <image
-      v-if="book.cover && !broken"
+      v-if="book.cover && !broken && !store.dataSaver"
       class="img"
       :src="absoluteUrl(book.cover)"
       mode="aspectFill"
