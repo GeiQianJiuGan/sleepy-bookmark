@@ -96,13 +96,20 @@ func (l *Library) Search(ctx context.Context, typ, key string, page int, opt Sea
 		return nil, nil, err
 	}
 	if opt.Exact {
-		books = slices.DeleteFunc(books, func(b *store.Book) bool { return !sameText(b.Title, key) })
+		books = slices.DeleteFunc(books, func(b *store.Book) bool { return !exactTitle(b.Title, key) })
 	} else {
 		slices.SortStableFunc(books, func(a, b *store.Book) int {
 			return cmp.Compare(relevance(a, key), relevance(b, key))
 		})
 	}
 	return books, errs, nil
+}
+
+// exactTitle reports whether a book is the one the reader named. Spacing, punctuation and case
+// are not compared, as sites and readers write them differently; a title of punctuation only
+// has nothing else and is compared as written.
+func exactTitle(title, key string) bool {
+	return sameText(title, key) || strings.TrimSpace(title) == strings.TrimSpace(key)
 }
 
 // relevance ranks a search result: the smaller, the better the book matches the keyword.
