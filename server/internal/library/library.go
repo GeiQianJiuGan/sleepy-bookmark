@@ -195,10 +195,20 @@ func (l *Library) refreshToc(ctx context.Context, b *store.Book) ([]*store.Chapt
 			l.disk.RemoveChapter(b.ID, id)
 		}
 		after, err := l.db.Chapters(b.ID)
-		if err != nil || len(before) == 0 || len(after) <= len(before) {
+		if err != nil || len(before) == 0 {
 			return []*store.Chapter(nil), err
 		}
-		return after[len(before):], nil
+		known := make(map[int64]bool, len(before))
+		for _, c := range before {
+			known[c.ID] = true
+		}
+		var added []*store.Chapter
+		for _, c := range after {
+			if !known[c.ID] {
+				added = append(added, c)
+			}
+		}
+		return added, nil
 	})
 	if err != nil {
 		return nil, err

@@ -111,17 +111,17 @@ func (d *DB) ChapterAt(bookID int64, idx int) (*Chapter, error) {
 
 type TocEntry struct{ Title, URL string }
 
-// ReplaceToc syncs the chapter list of a book by position. A chapter keeps its id (and its cache)
-// as long as its URL is unchanged. It returns the ids whose cached content is now stale.
+// ReplaceToc syncs the chapter list of a book. Chapters are matched by URL, so a chapter keeps
+// its id (which reading progress and the content cache refer to) when the source inserts,
+// removes or reorders chapters. It returns the ids of removed chapters that had cached content.
 func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error) {
 	old, err := d.Chapters(bookID)
 	if err != nil {
 		return nil, err
 	}
+	byURL := map[string][]*Chapter{}
 	for _, c := range old {
-		if c.Cached && (c.Idx >= len(toc) || toc[c.Idx].URL != c.URL) {
-			stale = append(stale, c.ID)
-		}
+		byURL[c.URL] = append(byURL[c.URL], c)
 	}
 
 	tx, err := d.Begin()
@@ -129,21 +129,29 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 		return nil, err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO chapters (book_id, idx, title, url) VALUES (?, ?, ?, ?)
-		ON CONFLICT (book_id, idx) DO UPDATE SET
-			title  = excluded.title,
-			cached = CASE WHEN url = excluded.url THEN cached ELSE 0 END,
-			url    = excluded.url`)
-	if err != nil {
+	// Park the existing rows on negative positions so that moving them cannot collide.
+	if _, err := tx.Exec(`UPDATE chapters SET idx = -id WHERE book_id = ?`, bookID); err != nil {
 		return nil, err
 	}
-	defer stmt.Close()
 	for i, t := range toc {
-		if _, err := stmt.Exec(bookID, i, t.Title, t.URL); err != nil {
+		if same := byURL[t.URL]; len(same) > 0 {
+			byURL[t.URL] = same[1:]
+			_, err = tx.Exec(`UPDATE chapters SET idx = ?, title = ? WHERE id = ?`, i, t.Title, same[0].ID)
+		} else {
+			_, err = tx.Exec(`INSERT INTO chapters (book_id, idx, title, url) VALUES (?, ?, ?, ?)`, bookID, i, t.Title, t.URL)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
-	if _, err := tx.Exec(`DELETE FROM chapters WHERE book_id = ? AND idx >= ?`, bookID, len(toc)); err != nil {
+	for _, gone := range byURL {
+		for _, c := range gone {
+			if c.Cached {
+				stale = append(stale, c.ID)
+			}
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM chapters WHERE book_id = ? AND idx < 0`, bookID); err != nil {
 		return nil, err
 	}
 	latest := ""
