@@ -116,8 +116,9 @@ async function open() {
     }
   } catch (e) {
     // No network: fall back to what was downloaded to the device.
+    // A download that has no chapters yet is no fallback; retrying must load the catalog again.
     const local = offlineBook(bookId)
-    if (!local) {
+    if (!local || !Object.keys(local.chapters).length) {
       loading.value = false
       error.value = errorText(e)
       canSwitch.value = false
