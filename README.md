@@ -43,7 +43,8 @@ npm run dev:h5          # 或者在浏览器里调试
 ```
 
 - `DEMO_SOURCE=true` 会在后端挂一个假的小说站和漫画站，并自动添加两个书源，搜索「演示」即可走通全流程。
-- 微信开发者工具里需要勾选「不校验合法域名」，并在根目录 `app.config.json` 中配置 `appId`（构建/开发时会自动同步到 `miniapp/src/manifest.json`）。
+- 先把根目录的 `app.config.example.json` 复制为 `app.config.json`（不进仓库），填上自己小程序的 `appId`。`miniapp/src/manifest.json` 也不进仓库，每次 `npm run dev:*` / `npm run build:*` 时由 `miniapp/manifest.base.json` 加上这个 `appId` 生成；要改 manifest 的其他内容，改 `manifest.base.json`。
+- 微信开发者工具里需要勾选「不校验合法域名」。
 - 后端地址统一在根目录 `app.config.json` 的 `serverUrl` 中配置（也可在 `miniapp/.env.development` / `miniapp/.env.production` 中通过 `VITE_API_BASE` 按环境覆盖）。
 
 检查命令：

@@ -2,10 +2,10 @@
   "name": "sleepy-bookmark-miniapp",
   "version": "0.0.0",
   "scripts": {
-    "dev:h5": "uni",
-    "dev:mp-weixin": "uni -p mp-weixin",
-    "build:h5": "uni build",
-    "build:mp-weixin": "uni build -p mp-weixin",
+    "dev:h5": "node scripts/manifest.mjs && uni",
+    "dev:mp-weixin": "node scripts/manifest.mjs && uni -p mp-weixin",
+    "build:h5": "node scripts/manifest.mjs && uni build",
+    "build:mp-weixin": "node scripts/manifest.mjs && uni build -p mp-weixin",
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {

@@ -11,3 +11,5 @@ data/
 /server/server
 deploy/.env
 app.config.json
+# generated from miniapp/manifest.base.json and app.config.json by miniapp/scripts/manifest.mjs
+/miniapp/src/manifest.json
