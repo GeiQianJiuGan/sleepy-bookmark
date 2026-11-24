@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // Kinds of failure, sent to the client as the error code so that it can decide between
@@ -25,6 +28,8 @@ type FetchError struct {
 	Kind   string
 	Status int
 	Err    error
+	// RetryAfter is how long the site asked to wait (Retry-After header), 0 if it did not say.
+	RetryAfter time.Duration
 }
 
 func (e *FetchError) Error() string {
@@ -88,7 +93,7 @@ func transportError(err error) error {
 	return &FetchError{Kind: KindNetwork, Err: err}
 }
 
-func statusError(status int, challenged bool) error {
+func statusError(status int, challenged bool, retryAfter string) error {
 	kind := KindHTTP
 	switch {
 	case challenged || status == 403:
@@ -98,5 +103,9 @@ func statusError(status int, challenged bool) error {
 	case status == 429 || status >= 500:
 		kind = KindBusy
 	}
-	return &FetchError{Kind: kind, Status: status}
+	e := &FetchError{Kind: kind, Status: status}
+	if secs, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && secs > 0 {
+		e.RetryAfter = time.Duration(secs) * time.Second
+	}
+	return e
 }

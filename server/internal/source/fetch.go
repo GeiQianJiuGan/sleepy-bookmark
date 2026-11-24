@@ -28,6 +28,9 @@ const (
 // (timeout, connection error, 429, 5xx).
 var RetryDelays = []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond}
 
+// MaxRetryAfter caps how long a Retry-After header can make one retry wait.
+var MaxRetryAfter = 10 * time.Second
+
 type page struct {
 	body []byte
 	// url is the address the body came from, after redirects.
@@ -86,8 +89,13 @@ func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body, accept
 		if err == nil || attempt == len(RetryDelays) || !errors.As(err, &fe) || !fe.Temporary() {
 			return data, ctype, final, err
 		}
+		// Wait as long as the site asks to, within reason; retrying sooner would fail again.
+		wait := RetryDelays[attempt]
+		if fe.RetryAfter > wait {
+			wait = min(fe.RetryAfter, MaxRetryAfter)
+		}
 		select {
-		case <-time.After(RetryDelays[attempt]):
+		case <-time.After(wait):
 		case <-ctx.Done():
 			return nil, "", "", err
 		}
@@ -127,7 +135,7 @@ func (f *Fetcher) once(ctx context.Context, src *Source, method, url, body, acce
 	}
 	challenged := resp.Header.Get("Cf-Mitigated") == "challenge" || isChallenge(data)
 	if resp.StatusCode >= 400 || challenged {
-		return nil, "", "", statusError(resp.StatusCode, challenged)
+		return nil, "", "", statusError(resp.StatusCode, challenged, resp.Header.Get("Retry-After"))
 	}
 	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), nil
 }
