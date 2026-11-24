@@ -92,3 +92,71 @@ func TestParseSourceFlexibleLegado(t *testing.T) {
 		t.Fatalf("unexpected flat comic conversion: %+v", fc)
 	}
 }
+
+func TestALegadoComicListIsReadWithoutItsScripts(t *testing.T) {
+	flat := `{
+		"bookSourceName": "示例图源",
+		"bookSourceUrl": "https://comic.example.com",
+		"bookSourceType": "漫画",
+		"ruleSearchUrl": "https://comic.example.com/s?q=searchKey&p=searchPage",
+		"ruleSearchList": ".results|.items",
+		"ruleSearchName": "h3@text\n@js:\njava.put(\"name\", result)",
+		"ruleSearchNoteUrl": "h3 a@href",
+		"ruleChapterList": ".box@.row!0@.chapters||.row@.chapters",
+		"ruleChapterName": "a@text\n@js:\na = \" \" + result",
+		"ruleContentUrl": "a@href",
+		"ruleBookContent": "class.pages@html"
+	}`
+	src, err := ParseSourceFlexible([]byte(flat))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for got, want := range map[string]string{
+		src.Search.List:    "css:.results, .items",
+		src.Search.Title:   "css:h3@text",
+		src.Toc.List:       "css:.box .row .chapters, .row .chapters",
+		src.Toc.Name:       "css:a@text",
+		src.Content.Images: "css:.pages img@src",
+	} {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+
+	// A script where the address of a chapter comes from cannot be left out.
+	scripted := `{
+		"bookSourceName": "示例图源",
+		"bookSourceUrl": "https://comic.example.com",
+		"bookSourceType": "漫画",
+		"ruleSearchUrl": "https://comic.example.com/s?q=searchKey",
+		"ruleSearchList": ".results",
+		"ruleSearchName": "h3@text",
+		"ruleSearchNoteUrl": "h3 a@href",
+		"ruleChapterList": ".chapters",
+		"ruleChapterName": "a@text",
+		"ruleContentUrl": "a@href@js:result + '?x=1'",
+		"ruleBookContent": "img@src"
+	}`
+	if _, err := ParseSourceFlexible([]byte(scripted)); err == nil {
+		t.Error("a rule whose chapter address is a script was imported")
+	}
+
+	// Older lists keep comics as text sources and name them by their group.
+	nested := `{
+		"bookSourceName": "示例",
+		"bookSourceGroup": "🎨漫画",
+		"bookSourceUrl": "https://comic.example.com",
+		"bookSourceType": 0,
+		"searchUrl": "/search?q={{key}}",
+		"ruleSearch": {"bookList": "class.item", "name": "tag.a.0@text", "bookUrl": "tag.a.0@href"},
+		"ruleToc": {"chapterList": "id.chapters@tag.a", "chapterName": "text", "chapterUrl": "href"},
+		"ruleContent": {"content": "class.man_img@html", "imageStyle": "FULL"}
+	}`
+	src, err = ParseSourceFlexible([]byte(nested))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Type != TypeComic || src.Content.Images != "css:.man_img img@src" {
+		t.Errorf("type %q, images %q", src.Type, src.Content.Images)
+	}
+}

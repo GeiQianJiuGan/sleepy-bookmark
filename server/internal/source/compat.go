@@ -10,13 +10,14 @@ import (
 // legadoSource is the subset of Legado (阅读) book-source JSON fields that can be mapped to
 // sleepy-bookmark's declarative rule engine without executing JavaScript.
 type legadoSource struct {
-	BookSourceName string `json:"bookSourceName"`
-	BookSourceURL  string `json:"bookSourceUrl"`
-	BookSourceType int    `json:"bookSourceType"` // 0=novel, 1=audio, 2=comic, 3=file
-	Header         string `json:"header"`
-	SearchURL      string `json:"searchUrl"`
-	ExploreURL     string `json:"exploreUrl"`
-	RuleSearch     *struct {
+	BookSourceName  string `json:"bookSourceName"`
+	BookSourceURL   string `json:"bookSourceUrl"`
+	BookSourceType  int    `json:"bookSourceType"` // 0=novel, 1=audio, 2=comic, 3=file
+	BookSourceGroup string `json:"bookSourceGroup"`
+	Header          string `json:"header"`
+	SearchURL       string `json:"searchUrl"`
+	ExploreURL      string `json:"exploreUrl"`
+	RuleSearch      *struct {
 		BookList    string `json:"bookList"`
 		Name        string `json:"name"`
 		Author      string `json:"author"`
@@ -50,6 +51,7 @@ type legadoSource struct {
 	} `json:"ruleToc"`
 	RuleContent *struct {
 		Content        string `json:"content"`
+		ImageStyle     string `json:"imageStyle"`
 		NextContentURL string `json:"nextContentUrl"`
 		ReplaceRegex   string `json:"replaceRegex"`
 	} `json:"ruleContent"`
@@ -89,6 +91,12 @@ func convertLegado(raw []byte) (*Source, bool, error) {
 	switch l.BookSourceType {
 	case 0:
 		typ = TypeNovel
+		// Lists written before the app had a comic type keep comics as text sources, and
+		// tell them apart by their group or by how the pictures are laid out.
+		if strings.Contains(l.BookSourceGroup, "漫画") || strings.Contains(l.BookSourceName, "漫画") ||
+			(l.RuleContent != nil && strings.TrimSpace(l.RuleContent.ImageStyle) != "") {
+			typ = TypeComic
+		}
 	case 2:
 		typ = TypeComic
 	default:
@@ -139,48 +147,48 @@ func convertLegado(raw []byte) (*Source, bool, error) {
 	}
 
 	if rs := l.RuleSearch; rs != nil && strings.TrimSpace(rs.BookList) != "" {
-		if hasLegadoJS(rs.BookList, rs.Name, rs.BookURL) {
+		if hasLegadoJS(rs.BookList, rs.BookURL) {
 			return nil, true, errors.New("搜索解析规则包含 JS 脚本，规则引擎不支持执行 JavaScript")
 		}
 		src.Search.List = convertLegadoExpr(rs.BookList, true)
-		src.Search.Title = convertLegadoExpr(rs.Name, false)
+		src.Search.Title = convertLegadoExpr(plainLegado(rs.Name), false)
 		src.Search.URLRule = convertLegadoExpr(rs.BookURL, false)
-		src.Search.Author = convertLegadoExpr(rs.Author, false)
-		src.Search.Cover = convertLegadoExpr(rs.CoverURL, false)
-		src.Search.Intro = convertLegadoExpr(rs.Intro, false)
-		src.Search.Latest = convertLegadoExpr(rs.LastChapter, false)
+		src.Search.Author = convertLegadoExpr(plainLegado(rs.Author), false)
+		src.Search.Cover = convertLegadoExpr(plainLegado(rs.CoverURL), false)
+		src.Search.Intro = convertLegadoExpr(plainLegado(rs.Intro), false)
+		src.Search.Latest = convertLegadoExpr(plainLegado(rs.LastChapter), false)
 	}
 
 	if re := l.RuleExplore; re != nil && strings.TrimSpace(re.BookList) != "" && strings.TrimSpace(l.ExploreURL) != "" {
-		if firstURL := firstLegadoExploreURL(l.ExploreURL); firstURL != "" && !hasLegadoJS(firstURL, re.BookList, re.Name, re.BookURL) {
+		if firstURL := firstLegadoExploreURL(l.ExploreURL); firstURL != "" && !hasLegadoJS(firstURL, re.BookList, re.BookURL) {
 			src.Recommend = &ListRule{
 				URL:     firstURL,
 				List:    convertLegadoExpr(re.BookList, true),
-				Title:   convertLegadoExpr(re.Name, false),
+				Title:   convertLegadoExpr(plainLegado(re.Name), false),
 				URLRule: convertLegadoExpr(re.BookURL, false),
-				Author:  convertLegadoExpr(re.Author, false),
-				Cover:   convertLegadoExpr(re.CoverURL, false),
-				Intro:   convertLegadoExpr(re.Intro, false),
-				Latest:  convertLegadoExpr(re.LastChapter, false),
+				Author:  convertLegadoExpr(plainLegado(re.Author), false),
+				Cover:   convertLegadoExpr(plainLegado(re.CoverURL), false),
+				Intro:   convertLegadoExpr(plainLegado(re.Intro), false),
+				Latest:  convertLegadoExpr(plainLegado(re.LastChapter), false),
 			}
 		}
 	}
 
 	if rb := l.RuleBookInfo; rb != nil {
-		if !hasLegadoJS(rb.Name, rb.Author, rb.CoverURL, rb.Intro, rb.LastChapter, rb.TocURL) {
+		{
 			src.Detail = DetailRule{
-				Title:  convertLegadoExpr(rb.Name, false),
-				Author: convertLegadoExpr(rb.Author, false),
-				Cover:  convertLegadoExpr(rb.CoverURL, false),
-				Intro:  convertLegadoExpr(rb.Intro, false),
-				Latest: convertLegadoExpr(rb.LastChapter, false),
+				Title:  convertLegadoExpr(plainLegado(rb.Name), false),
+				Author: convertLegadoExpr(plainLegado(rb.Author), false),
+				Cover:  convertLegadoExpr(plainLegado(rb.CoverURL), false),
+				Intro:  convertLegadoExpr(plainLegado(rb.Intro), false),
+				Latest: convertLegadoExpr(plainLegado(rb.LastChapter), false),
 				TocURL: convertLegadoExpr(rb.TocURL, false),
 			}
 		}
 	}
 
 	if rt := l.RuleToc; rt != nil && strings.TrimSpace(rt.ChapterList) != "" {
-		if hasLegadoJS(rt.ChapterList, rt.ChapterName, rt.ChapterURL) {
+		if hasLegadoJS(rt.ChapterList, rt.ChapterURL) {
 			return nil, true, errors.New("目录规则包含 JS 脚本，规则引擎不支持执行 JavaScript")
 		}
 		listRule := strings.TrimSpace(rt.ChapterList)
@@ -189,7 +197,7 @@ func convertLegado(raw []byte) (*Source, bool, error) {
 			listRule = strings.TrimPrefix(listRule, "-")
 		}
 		src.Toc.List = convertLegadoExpr(listRule, true)
-		src.Toc.Name = convertLegadoExpr(rt.ChapterName, false)
+		src.Toc.Name = convertLegadoExpr(plainLegado(rt.ChapterName), false)
 		src.Toc.URL = convertLegadoExpr(rt.ChapterURL, false)
 		if !hasLegadoJS(rt.NextTocURL) {
 			src.Toc.NextPage = convertLegadoExpr(rt.NextTocURL, false)
@@ -202,7 +210,7 @@ func convertLegado(raw []byte) (*Source, bool, error) {
 		}
 		expr := convertLegadoExpr(rc.Content, false)
 		if typ == TypeComic {
-			src.Content.Images = expr
+			src.Content.Images = legadoImages(expr)
 		} else {
 			src.Content.Body = expr
 		}
@@ -225,6 +233,44 @@ func convertLegado(raw []byte) (*Source, bool, error) {
 		return nil, true, err
 	}
 	return src, true, nil
+}
+
+// plainLegado is the part of a rule in front of its script. Lists often dress up a name or a
+// cover with one ("a@text\n@js: ..."); what the selector reads is used as it is, which is
+// better than leaving out the whole source. A rule that is only a script comes out empty.
+func plainLegado(rule string) string {
+	low := strings.ToLower(rule)
+	cut := len(rule)
+	for _, mark := range []string{"@js:", "<js>"} {
+		if i := strings.Index(low, mark); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	if cut == len(rule) {
+		return rule
+	}
+	rule = strings.TrimSpace(rule[:cut])
+	if rule == "*" || rule == "$" || strings.Contains(strings.ToLower(rule), "java.") {
+		return ""
+	}
+	return rule
+}
+
+// legadoImages turns a comic's content rule into one that reads picture addresses: such
+// rules often name the block the pictures are in, or ask for its html.
+func legadoImages(expr string) string {
+	if !strings.HasPrefix(expr, "css:") || strings.Contains(expr, "##") {
+		return expr
+	}
+	sel, attr, has := strings.Cut(expr, "@")
+	if has && attr != "html" && attr != "outerHtml" && attr != "text" {
+		return expr
+	}
+	// The last step already names the pictures when it is an img tag, not a class with img in it.
+	if f := strings.Fields(strings.TrimPrefix(sel, "css:")); len(f) > 0 && strings.Contains(f[len(f)-1], "img") && !strings.ContainsAny(f[len(f)-1], ".#") {
+		return sel + "@src"
+	}
+	return sel + " img@src"
 }
 
 func hasLegadoJS(rules ...string) bool {
@@ -282,14 +328,37 @@ func convertLegadoExpr(raw string, isList bool) string {
 	}
 	// Strip Legado leading reverse/filter markers that are handled elsewhere.
 	s = strings.TrimPrefix(s, "+")
+	if isList {
+		s = strings.TrimPrefix(s, "-")
+	}
 	// Separate ##regex##repl suffix first so selector conversion does not touch it.
 	suffix := ""
 	if idx := strings.Index(s, "##"); idx >= 0 {
 		suffix = s[idx:]
 		s = strings.TrimSpace(s[:idx])
 	}
+	// Some lists write alternatives with one bar; XPath has its own meaning for it.
+	if isList && !strings.Contains(s, "||") && !strings.HasPrefix(s, "/") && !strings.HasPrefix(strings.ToLower(s), "@xpath:") {
+		s = strings.ReplaceAll(s, "|", "||")
+	}
 	// When fallback alternatives are separated by || or &&, take the first branch.
 	if idx := strings.Index(s, "||"); idx >= 0 {
+		// A list written as alternatives is read as all of them at once when each is a
+		// plain selector: only the one the page has finds anything.
+		if isList && suffix == "" {
+			var all []string
+			for _, alt := range strings.Split(s, "||") {
+				c := convertLegadoExpr(alt, true)
+				if !strings.HasPrefix(c, "css:") {
+					all = nil
+					break
+				}
+				all = append(all, strings.TrimPrefix(c, "css:"))
+			}
+			if len(all) > 1 {
+				return "css:" + strings.Join(all, ", ")
+			}
+		}
 		s = strings.TrimSpace(s[:idx])
 	}
 	if s == "" {
@@ -360,6 +429,10 @@ func isLegadoAttr(s string) bool {
 func legadoSegmentToCSS(seg string) string {
 	// Strip trailing positional index like .0 or .-1 (CSS uses the selector broadly; first() takes index 0).
 	seg = reLegadoIndex.ReplaceAllString(seg, "")
+	// "!0" leaves out an element by its place; all are kept, as a selector cannot say that.
+	if i := strings.LastIndex(seg, "!"); i > 0 && strings.Trim(seg[i+1:], "0123456789:-") == "" {
+		seg = seg[:i]
+	}
 	switch {
 	case strings.HasPrefix(seg, "class."):
 		cls := strings.TrimPrefix(seg, "class.")
@@ -441,7 +514,7 @@ func convertLegadoFlat(raw []byte) (*Source, bool, error) {
 	if strings.Contains(l.RuleBookContent, "_H006_") || strings.Contains(l.RuleChapterList, "_H006_") {
 		return nil, true, errors.New("该图源使用了异次元加密规则，无法直接解析")
 	}
-	if hasLegadoJS(su, l.RuleSearchList, l.RuleSearchName, l.RuleSearchNoteURL, l.RuleChapterList, l.RuleChapterName, l.RuleContentURL, l.RuleBookContent) {
+	if hasLegadoJS(su, l.RuleSearchList, l.RuleSearchNoteURL, l.RuleChapterList, l.RuleChapterURL, l.RuleContentURL, l.RuleBookContent) {
 		return nil, true, errors.New("规则包含 JS 脚本，规则引擎不支持执行 JavaScript")
 	}
 
@@ -467,16 +540,16 @@ func convertLegadoFlat(raw []byte) (*Source, bool, error) {
 	}
 	if strings.TrimSpace(l.RuleSearchList) != "" {
 		src.Search.List = convertLegadoExpr(l.RuleSearchList, true)
-		src.Search.Title = convertLegadoExpr(l.RuleSearchName, false)
+		src.Search.Title = convertLegadoExpr(plainLegado(l.RuleSearchName), false)
 		src.Search.URLRule = convertLegadoExpr(l.RuleSearchNoteURL, false)
-		src.Search.Author = convertLegadoExpr(l.RuleSearchAuthor, false)
-		src.Search.Cover = convertLegadoExpr(l.RuleSearchCoverURL, false)
+		src.Search.Author = convertLegadoExpr(plainLegado(l.RuleSearchAuthor), false)
+		src.Search.Cover = convertLegadoExpr(plainLegado(l.RuleSearchCoverURL), false)
 	}
 	src.Detail = DetailRule{
-		Title:  convertLegadoExpr(l.RuleBookName, false),
-		Author: convertLegadoExpr(l.RuleBookAuthor, false),
-		Cover:  convertLegadoExpr(l.RuleCoverURL, false),
-		Intro:  convertLegadoExpr(l.RuleIntroduce, false),
+		Title:  convertLegadoExpr(plainLegado(l.RuleBookName), false),
+		Author: convertLegadoExpr(plainLegado(l.RuleBookAuthor), false),
+		Cover:  convertLegadoExpr(plainLegado(l.RuleCoverURL), false),
+		Intro:  convertLegadoExpr(plainLegado(l.RuleIntroduce), false),
 		TocURL: convertLegadoExpr(l.RuleChapterURL, false),
 	}
 	if cl := strings.TrimSpace(l.RuleChapterList); cl != "" {
@@ -485,20 +558,13 @@ func convertLegadoFlat(raw []byte) (*Source, bool, error) {
 			cl = strings.TrimPrefix(cl, "-")
 		}
 		src.Toc.List = convertLegadoExpr(cl, true)
-		src.Toc.Name = convertLegadoExpr(l.RuleChapterName, false)
+		src.Toc.Name = convertLegadoExpr(plainLegado(l.RuleChapterName), false)
 		src.Toc.URL = convertLegadoExpr(l.RuleContentURL, false)
 	}
 	if cb := strings.TrimSpace(l.RuleBookContent); cb != "" {
 		expr := convertLegadoExpr(cb, false)
 		if typ == TypeComic {
-			if strings.HasPrefix(expr, "css:") && !strings.Contains(expr, "@") {
-				if strings.Contains(expr, "img") {
-					expr += "@src"
-				} else {
-					expr += " img@src"
-				}
-			}
-			src.Content.Images = expr
+			src.Content.Images = legadoImages(expr)
 		} else {
 			src.Content.Body = expr
 		}

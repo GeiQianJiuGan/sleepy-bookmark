@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -130,5 +133,30 @@ func TestStreamRulesBoundsTheNumberOfRules(t *testing.T) {
 	doc := "[" + strings.Repeat("0,", maxListRules) + "0]"
 	if _, _, err := streamRules(strings.NewReader(doc)); !errors.Is(err, errTooMany) {
 		t.Fatalf("err: %v", err)
+	}
+}
+
+func TestStreamRulesUnpacksAPackedList(t *testing.T) {
+	var z bytes.Buffer
+	w := zlib.NewWriter(&z)
+	w.Write([]byte("[" + ruleJSON("甲") + "," + ruleJSON("乙") + "]"))
+	w.Close()
+	packed := base64.StdEncoding.EncodeToString(z.Bytes())
+	rules, left, err := streamRules(iotest.OneByteReader(strings.NewReader(packed)))
+	if err != nil || len(rules) != 2 || len(left) != 0 {
+		t.Fatalf("%d rules, %d left, %v", len(rules), len(left), err)
+	}
+	// What is packed inside is unpacked once only, and text that only looks packed is not a list.
+	twice := base64.StdEncoding.EncodeToString(func() []byte {
+		var b bytes.Buffer
+		w := zlib.NewWriter(&b)
+		w.Write([]byte(packed))
+		w.Close()
+		return b.Bytes()
+	}())
+	for _, doc := range []string{twice, "error: not found", "eJwrong"} {
+		if rules, _, err := streamRules(strings.NewReader(doc)); err == nil && len(rules) > 0 {
+			t.Errorf("%q was read as a list", doc[:8])
+		}
 	}
 }
