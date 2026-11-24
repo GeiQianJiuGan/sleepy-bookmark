@@ -118,10 +118,11 @@ func rulesChanged(old, cur *source.Source) (catalog, content bool) {
 	if old == nil {
 		return true, true
 	}
-	content = old.Type != cur.Type || old.Charset != cur.Charset || !maps.Equal(old.Headers, cur.Headers) ||
+	// baseUrl counts as a content change: it is the default Referer of every request.
+	content = old.Type != cur.Type || old.BaseURL != cur.BaseURL || old.Charset != cur.Charset || !maps.Equal(old.Headers, cur.Headers) ||
 		old.Content.Body != cur.Content.Body || old.Content.Images != cur.Content.Images ||
 		old.Content.NextPage != cur.Content.NextPage || !slices.Equal(old.Content.Purify, cur.Content.Purify)
-	catalog = content || old.BaseURL != cur.BaseURL || old.Detail != cur.Detail || old.Toc != cur.Toc
+	catalog = content || old.Detail != cur.Detail || old.Toc != cur.Toc
 	return catalog, content
 }
 
