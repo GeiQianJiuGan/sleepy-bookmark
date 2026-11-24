@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -135,8 +134,6 @@ func (a *Auth) Login(ctx context.Context, code, appID string) (*Session, error) 
 	if !a.cfg.DevLogin {
 		var err error
 		if openid, err = a.wxOpenID(ctx, code, appID); err != nil {
-			// The code is a credential, so only its length is logged.
-			log.Printf("login failed: %v (client appid %q, code of %d chars)", err, appID, len(code))
 			return nil, err
 		}
 	}
