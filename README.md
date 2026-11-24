@@ -74,9 +74,10 @@ docker compose up -d --build
 
 ## 功能
 
-- 顶部切换小说 / 漫画模式，书架、搜索、历史都按当前模式过滤
+- 左上角的图标在小说 / 漫画之间整体切换，书架、搜索、历史都按当前模式过滤
 - 书源管理：新增、批量导入、编辑、启停、删除、在线测试
-- 多书源并发搜索
+- 多书源并发搜索，可以只搜某一个书源，可选模糊（默认，按书名相关度排序）或精确（书名完全一致）
+- 搜索页按书源分组显示推荐，每个书源前 10 本（书源规则里配了 `recommend` 才有）
 - 小说阅读器：字号、四种背景、连续加载下一章、目录跳转
 - 漫画阅读器：纵向长条、懒加载
 - 书架、历史和阅读进度保存在服务器
@@ -100,7 +101,8 @@ docker compose up -d --build
 | `GET/POST /api/sources`，`PUT/DELETE /api/sources/:id` | 书源管理 |
 | `PUT /api/sources/:id/enabled` | 启停 |
 | `POST /api/sources/test` | 不保存，直接测试一条规则 |
-| `GET /api/search?type=&q=&page=` | 搜索 |
+| `GET /api/search?type=&q=&page=&source=&match=` | 搜索。`source` 是书源 id，不传搜全部；`match=exact` 只留书名完全一致的 |
+| `GET /api/recommend?type=&source=` | 各书源的推荐，每个书源最多 10 本；`source` 不传返回全部 |
 | `GET /api/books/:id`，`GET /api/books/:id/chapters?refresh=1` | 详情、目录 |
 | `GET /api/chapters/:id` | 正文或图片列表 |
 | `GET /api/books/:id/alternatives` | 其他书源里的同名书 |

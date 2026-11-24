@@ -54,16 +54,27 @@ func (e *Engine) Search(ctx context.Context, src *Source, key string, page int) 
 		page = 1
 	}
 	fill := strings.NewReplacer("{{key}}", url.QueryEscape(key), "{{page}}", strconv.Itoa(page))
-	// A search URL is appended to baseUrl (which may have a path) unless it is absolute.
-	u := fill.Replace(src.Search.URL)
+	return e.list(ctx, src, src.Search, fill)
+}
+
+// Recommend reads the source's recommendation list; a source without one has none.
+func (e *Engine) Recommend(ctx context.Context, src *Source) ([]BookInfo, error) {
+	if src.Recommend == nil {
+		return nil, nil
+	}
+	return e.list(ctx, src, *src.Recommend, strings.NewReplacer("{{page}}", "1"))
+}
+
+func (e *Engine) list(ctx context.Context, src *Source, r ListRule, fill *strings.Replacer) ([]BookInfo, error) {
+	// A list URL is appended to baseUrl (which may have a path) unless it is absolute.
+	u := fill.Replace(r.URL)
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		u = src.BaseURL + "/" + strings.TrimPrefix(u, "/")
 	}
-	doc, u, err := e.load(ctx, src, src.Search.Method, u, fill.Replace(src.Search.Body))
+	doc, u, err := e.load(ctx, src, r.Method, u, fill.Replace(r.Body))
 	if err != nil {
 		return nil, err
 	}
-	r := src.Search
 	var out []BookInfo
 	for _, item := range doc.Find(r.List) {
 		b := BookInfo{

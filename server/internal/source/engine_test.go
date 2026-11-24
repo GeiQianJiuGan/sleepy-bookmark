@@ -70,8 +70,12 @@ func TestComicSource(t *testing.T) {
 	src, ctx := &sources[1], context.Background()
 
 	books, err := e.Search(ctx, src, "", 1)
-	if err != nil || len(books) != 2 {
+	if err != nil || len(books) != 4 {
 		t.Fatalf("search: %v, %d books", err, len(books))
+	}
+	top, err := e.Recommend(ctx, src)
+	if err != nil || len(top) != 4 || top[0].Title != "演示漫画：色块物语" || top[0].URL != books[0].URL {
+		t.Fatalf("recommend: %v, %+v", err, top)
 	}
 	toc, err := e.Toc(ctx, src, books[0].URL)
 	if err != nil || len(toc) != 8 {

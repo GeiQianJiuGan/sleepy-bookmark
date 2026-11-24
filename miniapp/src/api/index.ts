@@ -70,11 +70,24 @@ export interface SearchResult {
   errors: { source: string; error: string; kind: string }[]
 }
 
+export interface Recommendation {
+  sourceId: number
+  sourceName: string
+  books: Book[]
+}
+
 const q = encodeURIComponent
 
 export const api = {
-  search: (type: Mode, key: string, page = 1) =>
-    request<SearchResult>('GET', `/search?type=${type}&q=${q(key)}&page=${page}`),
+  /** Searches every enabled source, or only `source`; `exact` keeps the books of that very title. */
+  search: (type: Mode, key: string, opt: { source?: number; exact?: boolean } = {}) =>
+    request<SearchResult>(
+      'GET',
+      `/search?type=${type}&q=${q(key)}` + (opt.source ? `&source=${opt.source}` : '') + (opt.exact ? '&match=exact' : ''),
+    ),
+  /** The first books of one source's recommendation list; empty when it has none or cannot be read. */
+  recommend: (type: Mode, source: number) =>
+    request<Recommendation[]>('GET', `/recommend?type=${type}&source=${source}`),
   book: (id: number) => request<Book>('GET', `/books/${id}`),
   chapters: (bookId: number, refresh = false) =>
     request<Chapter[]>('GET', `/books/${bookId}/chapters${refresh ? '?refresh=1' : ''}`),
@@ -94,7 +107,7 @@ export const api = {
   saveProgress: (chapterId: number, position: number) => request('PUT', '/history', { chapterId, position }),
   removeHistory: (bookId?: number) => request('DELETE', bookId ? `/history/${bookId}` : '/history'),
 
-  sources: () => request<Source[]>('GET', '/sources'),
+  sources: (type?: Mode) => request<Source[]>('GET', type ? `/sources?type=${type}` : '/sources'),
   createSources: (rules: unknown) => request<{ ids: number[] }>('POST', '/sources', rules),
   updateSource: (id: number, rule: unknown) => request('PUT', `/sources/${id}`, rule),
   setSourceEnabled: (id: number, enabled: boolean) => request('PUT', `/sources/${id}/enabled`, { enabled }),

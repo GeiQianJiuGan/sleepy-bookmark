@@ -45,6 +45,7 @@ func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *ec
 	g.DELETE("/sources/:id", s.deleteSource)
 
 	g.GET("/search", s.search)
+	g.GET("/recommend", s.recommend)
 	g.GET("/books/:id", s.book)
 	g.GET("/books/:id/chapters", s.chapters)
 	g.GET("/books/:id/alternatives", s.alternatives)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,8 @@ type Library struct {
 	engine *source.Engine
 	flight singleflight.Group
 	health healthBook
+
+	recommends recommendCache
 
 	// background limits how many prefetch jobs run at once.
 	background chan struct{}
@@ -74,17 +77,58 @@ type SearchError struct {
 
 var errPaused = errors.New("连续多次无法访问，暂时跳过")
 
-// Search queries every enabled source of the given type concurrently.
-func (l *Library) Search(ctx context.Context, typ, key string, page int) ([]*store.Book, []SearchError, error) {
-	return l.search(ctx, typ, key, page, 0)
+// SearchOptions narrows a search.
+type SearchOptions struct {
+	// SourceID searches one source only; zero searches every enabled source.
+	SourceID int64
+	// Exact keeps only the books whose title is the keyword.
+	Exact bool
 }
 
-func (l *Library) search(ctx context.Context, typ, key string, page int, exceptSource int64) ([]*store.Book, []SearchError, error) {
+// Search queries the enabled sources of the given type concurrently. The sites decide what
+// matches a keyword; the result is ordered by how well the title and author match it, and with
+// Exact is reduced to the books of that title.
+func (l *Library) Search(ctx context.Context, typ, key string, page int, opt SearchOptions) ([]*store.Book, []SearchError, error) {
+	books, errs, err := l.search(ctx, typ, key, page, func(r *store.SourceRow) bool {
+		return opt.SourceID == 0 || r.ID == opt.SourceID
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if opt.Exact {
+		books = slices.DeleteFunc(books, func(b *store.Book) bool { return !sameText(b.Title, key) })
+	} else {
+		slices.SortStableFunc(books, func(a, b *store.Book) int {
+			return cmp.Compare(relevance(a, key), relevance(b, key))
+		})
+	}
+	return books, errs, nil
+}
+
+// relevance ranks a search result: the smaller, the better the book matches the keyword.
+func relevance(b *store.Book, key string) int {
+	title, author, key := foldText(b.Title), foldText(b.Author), foldText(key)
+	switch {
+	case key == "":
+		return 0
+	case title == key:
+		return 0
+	case strings.HasPrefix(title, key):
+		return 1
+	case strings.Contains(title, key):
+		return 2
+	case strings.Contains(author, key):
+		return 3
+	}
+	return 4
+}
+
+func (l *Library) search(ctx context.Context, typ, key string, page int, want func(*store.SourceRow) bool) ([]*store.Book, []SearchError, error) {
 	rows, err := l.db.Sources(typ, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows = slices.DeleteFunc(rows, func(r *store.SourceRow) bool { return r.ID == exceptSource })
+	rows = slices.DeleteFunc(rows, func(r *store.SourceRow) bool { return !want(r) })
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
 
@@ -439,7 +483,7 @@ func (l *Library) Alternatives(ctx context.Context, bookID int64) ([]*store.Book
 	if err != nil {
 		return nil, err
 	}
-	found, _, err := l.search(ctx, b.Type, b.Title, 1, b.SourceID)
+	found, _, err := l.search(ctx, b.Type, b.Title, 1, func(r *store.SourceRow) bool { return r.ID != b.SourceID })
 	if err != nil {
 		return nil, err
 	}

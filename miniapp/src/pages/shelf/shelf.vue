@@ -4,7 +4,7 @@ import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { api, type Book } from '@/api'
 import { errorText, toastError } from '@/api/http'
 import { useAppStore } from '@/stores/app'
-import ModeSwitch from '@/components/ModeSwitch.vue'
+import AppBar from '@/components/AppBar.vue'
 import BookCover from '@/components/BookCover.vue'
 import LoadState from '@/components/LoadState.vue'
 
@@ -67,7 +67,7 @@ function caption(b: Book): string {
 
 <template>
   <view>
-    <ModeSwitch />
+    <AppBar title="书架" />
     <view v-if="books.length" class="grid">
       <view v-for="b in books" :key="b.id" class="cell" @click="open(b)" @longpress="more(b)">
         <BookCover :book="b" />

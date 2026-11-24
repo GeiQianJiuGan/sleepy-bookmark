@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { API_BASE } from '@/config'
 import { ensureLogin } from '@/api/http'
+import AppBar from '@/components/AppBar.vue'
 
 const status = ref('登录中…')
 const failed = ref(false)
@@ -26,6 +27,7 @@ const go = (url: string) => uni.navigateTo({ url })
 
 <template>
   <view>
+    <AppBar title="我的" />
     <view class="account">
       <view class="avatar">阅</view>
       <view class="who">

@@ -28,16 +28,18 @@ type Source struct {
 	BaseURL string            `json:"baseUrl"`
 	Headers map[string]string `json:"headers,omitempty"`
 	// Charset forces the page encoding (e.g. "gbk"); empty means auto-detect.
-	Charset     string      `json:"charset,omitempty"`
-	RateLimitMs int         `json:"rateLimitMs,omitempty"`
-	Search      SearchRule  `json:"search"`
-	Detail      DetailRule  `json:"detail"`
-	Toc         TocRule     `json:"toc"`
-	Content     ContentRule `json:"content"`
+	Charset     string     `json:"charset,omitempty"`
+	RateLimitMs int        `json:"rateLimitMs,omitempty"`
+	Search      SearchRule `json:"search"`
+	// Recommend is an optional book list page (ranking, home page) shown before a search.
+	Recommend *ListRule   `json:"recommend,omitempty"`
+	Detail    DetailRule  `json:"detail"`
+	Toc       TocRule     `json:"toc"`
+	Content   ContentRule `json:"content"`
 }
 
-type SearchRule struct {
-	// URL may contain {{key}} and {{page}}.
+// ListRule reads books from a list page. The search uses it with {{key}} and {{page}} in URL and Body.
+type ListRule struct {
 	URL     string `json:"url"`
 	Method  string `json:"method,omitempty"`
 	Body    string `json:"body,omitempty"`
@@ -49,6 +51,8 @@ type SearchRule struct {
 	Intro   string `json:"intro,omitempty"`
 	Latest  string `json:"latest,omitempty"`
 }
+
+type SearchRule = ListRule
 
 type DetailRule struct {
 	Title  string `json:"title,omitempty"`
@@ -98,6 +102,8 @@ func (s *Source) Validate() error {
 		return errors.New("baseUrl 必须以 http:// 或 https:// 开头")
 	case s.Search.URL == "" || s.Search.List == "" || s.Search.Title == "" || s.Search.URLRule == "":
 		return errors.New("search 需要 url / list / title / bookUrl")
+	case s.Recommend != nil && (s.Recommend.URL == "" || s.Recommend.List == "" || s.Recommend.Title == "" || s.Recommend.URLRule == ""):
+		return errors.New("recommend 需要 url / list / title / bookUrl")
 	case s.Toc.List == "" || s.Toc.URL == "":
 		return errors.New("toc 需要 list / url")
 	case s.Type == TypeNovel && s.Content.Body == "":

@@ -87,14 +87,15 @@ func (l *Library) ResetHealth(sourceID int64) { l.health.reset(sourceID) }
 
 // sameText compares titles and author names ignoring spacing, punctuation and case.
 func sameText(a, b string) bool {
-	norm := func(s string) string {
-		return strings.Map(func(r rune) rune {
-			if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
-				return -1
-			}
-			return unicode.ToLower(r)
-		}, s)
-	}
-	a, b = norm(a), norm(b)
+	a, b = foldText(a), foldText(b)
 	return a != "" && a == b
+}
+
+func foldText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, s)
 }

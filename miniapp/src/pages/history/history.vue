@@ -4,7 +4,7 @@ import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { api, type Book } from '@/api'
 import { errorText, toastError } from '@/api/http'
 import { useAppStore } from '@/stores/app'
-import ModeSwitch from '@/components/ModeSwitch.vue'
+import AppBar from '@/components/AppBar.vue'
 import BookItem from '@/components/BookItem.vue'
 import LoadState from '@/components/LoadState.vue'
 
@@ -52,7 +52,7 @@ function remove(b?: Book) {
 
 <template>
   <view>
-    <ModeSwitch />
+    <AppBar title="浏览历史" back />
     <view v-for="b in books" :key="b.id" @click="open(b)" @longpress="remove(b)">
       <BookItem :book="b" />
     </view>

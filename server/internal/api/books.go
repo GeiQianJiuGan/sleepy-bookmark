@@ -8,8 +8,22 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/auth"
+	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/library"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
+
+// sourceParam reads the optional source query parameter; zero means every source.
+func sourceParam(c echo.Context) (int64, error) {
+	v := c.QueryParam("source")
+	if v == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, badRequest("source 不是书源编号")
+	}
+	return id, nil
+}
 
 func (s *Server) search(c echo.Context) error {
 	key := strings.TrimSpace(c.QueryParam("q"))
@@ -17,7 +31,12 @@ func (s *Server) search(c echo.Context) error {
 		return badRequest("缺少搜索关键词 q")
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
-	books, errs, err := s.lib.Search(c.Request().Context(), c.QueryParam("type"), key, page)
+	opt := library.SearchOptions{Exact: c.QueryParam("match") == "exact"}
+	var err error
+	if opt.SourceID, err = sourceParam(c); err != nil {
+		return err
+	}
+	books, errs, err := s.lib.Search(c.Request().Context(), c.QueryParam("type"), key, page, opt)
 	if err != nil {
 		return err
 	}
@@ -25,6 +44,28 @@ func (s *Server) search(c echo.Context) error {
 		b.Cover = s.imgURL(b.SourceID, b.Cover)
 	}
 	return c.JSON(http.StatusOK, echo.Map{"books": books, "errors": errs})
+}
+
+func (s *Server) recommend(c echo.Context) error {
+	sourceID, err := sourceParam(c)
+	if err != nil {
+		return err
+	}
+	groups, err := s.lib.Recommend(c.Request().Context(), c.QueryParam("type"), sourceID)
+	if err != nil {
+		return err
+	}
+	for i, g := range groups {
+		// The lists are cached and shared between requests, so sign the cover on a copy.
+		books := make([]*store.Book, len(g.Books))
+		for i, b := range g.Books {
+			signed := *b
+			signed.Cover = s.imgURL(b.SourceID, b.Cover)
+			books[i] = &signed
+		}
+		groups[i].Books = books
+	}
+	return c.JSON(http.StatusOK, groups)
 }
 
 func (s *Server) shelfJSON(c echo.Context, books []*store.ShelfBook, err error) error {

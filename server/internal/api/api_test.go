@@ -530,3 +530,124 @@ func itoa(n int64) string {
 	raw, _ := json.Marshal(n)
 	return string(raw)
 }
+
+func TestSearchBySourceAndExactTitle(t *testing.T) {
+	c := login(t)
+	c.addCopy("copy", "")
+	var copyID int64
+	for _, s := range c.sources("?type=novel") {
+		if s.Name == "copy" {
+			copyID = s.ID
+		}
+	}
+	titles := func(query string) []string {
+		t.Helper()
+		var r searchResult
+		if code := c.do("GET", "/api/search?type=novel&q="+url.QueryEscape("灯火")+query, nil, &r); code != 200 {
+			t.Fatalf("search %q: %d", query, code)
+		}
+		out := []string{}
+		for _, b := range r.Books {
+			out = append(out, b.SourceName+"/"+b.Title)
+		}
+		return out
+	}
+
+	if got := titles(""); len(got) != 4 {
+		t.Fatalf("both sources: %v", got)
+	}
+	got := titles("&source=" + itoa(copyID))
+	if len(got) != 2 || got[0] != "copy/长夜灯火" || got[1] != "copy/长夜灯火" {
+		t.Fatalf("one source: %v", got)
+	}
+	if got := titles("&match=exact"); len(got) != 0 {
+		t.Fatalf("exact search for part of a title: %v", got)
+	}
+	if code := c.do("GET", "/api/search?type=novel&q=x&source=abc", nil, nil); code != http.StatusBadRequest {
+		t.Fatalf("bad source: %d", code)
+	}
+
+	// A keyword may match the author; an exact search keeps only the books of that very title.
+	var r searchResult
+	c.do("GET", "/api/search?type=novel&source="+itoa(copyID)+"&q="+url.QueryEscape("演示作者乙"), nil, &r)
+	if len(r.Books) != 3 {
+		t.Fatalf("author search: %+v", r.Books)
+	}
+	c.do("GET", "/api/search?type=novel&match=exact&q="+url.QueryEscape("长夜灯火"), nil, &r)
+	if len(r.Books) != 4 {
+		t.Fatalf("exact search: %+v", r.Books)
+	}
+	for _, b := range r.Books {
+		if b.Title != "长夜灯火" {
+			t.Fatalf("exact search returned %q", b.Title)
+		}
+	}
+}
+
+func TestRecommendListsTopTenPerSource(t *testing.T) {
+	c := login(t)
+	type group struct {
+		SourceID   int64
+		SourceName string
+		Books      []struct {
+			ID           int64
+			Title, Cover string
+		}
+	}
+	var novels, comics []group
+	c.do("GET", "/api/recommend?type=novel", nil, &novels)
+	if len(novels) != 1 || novels[0].SourceName != "演示小说源" || len(novels[0].Books) != 10 {
+		t.Fatalf("novel recommendations: %+v", novels)
+	}
+	first := novels[0].Books[0]
+	if first.Title != "演示小说：星河旅人" || !strings.HasPrefix(first.Cover, "/api/img?") {
+		t.Fatalf("first recommendation: %+v", first)
+	}
+	if code := c.do("GET", "/api/books/"+itoa(first.ID), nil, nil); code != 200 {
+		t.Fatalf("open recommended book: %d", code)
+	}
+	c.do("GET", "/api/recommend?type=comic", nil, &comics)
+	if len(comics) != 1 || len(comics[0].Books) != 4 {
+		t.Fatalf("comic recommendations: %+v", comics)
+	}
+
+	// A source without a recommend rule and one that cannot be reached are left out quietly;
+	// the cover links of the cached list stay valid on the second request.
+	rule := c.sources("?type=novel")[0].Rule
+	delete(rule, "recommend")
+	rule["name"] = "plain"
+	c.do("POST", "/api/sources", rule, nil)
+	c.addCopy("dead", "http://127.0.0.1:1")
+	var again []group
+	if code := c.do("GET", "/api/recommend?type=novel", nil, &again); code != 200 || len(again) != 1 {
+		t.Fatalf("recommendations with a plain and a dead source: %d %+v", code, again)
+	}
+	if again[0].Books[0].Cover != first.Cover {
+		t.Fatalf("cover changed between requests: %q, %q", first.Cover, again[0].Books[0].Cover)
+	}
+	for _, s := range c.sources("?type=novel") {
+		if s.Health != nil {
+			t.Errorf("a failed recommendation counted against source %q", s.Name)
+		}
+	}
+
+	var one []group
+	c.do("GET", "/api/recommend?type=novel&source="+itoa(novels[0].SourceID), nil, &one)
+	if len(one) != 1 || one[0].SourceID != novels[0].SourceID {
+		t.Fatalf("recommendations of one source: %+v", one)
+	}
+
+	// The list read earlier is kept while the site is down.
+	c.site.Close()
+	c.do("GET", "/api/recommend?type=novel", nil, &again)
+	if len(again) != 1 || len(again[0].Books) != 10 {
+		t.Fatalf("recommendations during an outage: %+v", again)
+	}
+
+	bad := c.sources("?type=novel")[0].Rule
+	bad["name"] = "bad"
+	bad["recommend"] = map[string]any{"url": "/rank"}
+	if code := c.do("POST", "/api/sources", bad, nil); code != http.StatusBadRequest {
+		t.Fatalf("incomplete recommend rule: %d", code)
+	}
+}

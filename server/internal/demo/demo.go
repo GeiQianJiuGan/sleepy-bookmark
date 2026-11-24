@@ -12,6 +12,7 @@ import (
 	"image/draw"
 	"image/png"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,11 +34,23 @@ type book struct {
 var novels = []book{
 	{1, "演示小说：星河旅人", "演示作者甲", "一位旅人穿行在群星之间的故事。仅用于演示书源规则。", 30},
 	{2, "演示小说：山海札记", "演示作者乙", "记录山与海之间的见闻。仅用于演示书源规则。", 12},
+	{3, "长夜灯火", "演示作者丙", "守夜人和一盏不灭的灯。", 6},
+	{4, "北境来信", "演示作者丁", "十二封从北方寄来的信。", 6},
+	{5, "机关城", "演示作者甲", "一座会移动的城。", 6},
+	{6, "潮汐之书", "演示作者乙", "潮起潮落之间的一年。", 6},
+	{7, "纸上江湖", "演示作者丙", "说书人笔下的江湖。", 6},
+	{8, "云端邮局", "演示作者丁", "把信送到云上去。", 6},
+	{9, "第七个站台", "演示作者甲", "一趟没有终点的列车。", 6},
+	{10, "旧城地图", "演示作者乙", "按一张旧地图寻路。", 6},
+	{11, "雪线以上", "演示作者丙", "登山队的日志。", 6},
+	{12, "长夜灯火", "演示作者戊", "同名的另一本书。", 6},
 }
 
 var comics = []book{
 	{1, "演示漫画：色块物语", "演示画师甲", "每一页都是一张自动生成的色块图。", 8},
 	{2, "演示漫画：数字迷宫", "演示画师乙", "用页码拼成的迷宫。", 5},
+	{3, "方格猫", "演示画师丙", "住在格子里的猫。", 3},
+	{4, "折纸飞船", "演示画师甲", "一张纸折出的远航。", 3},
 }
 
 const (
@@ -53,6 +66,12 @@ func find(list []book, id string) *book {
 		}
 	}
 	return nil
+}
+
+func ranked(list []book) []book {
+	out := slices.Clone(list)
+	slices.SortStableFunc(out, func(a, b book) int { return b.Chapters - a.Chapters })
+	return out
 }
 
 func match(list []book, key string) []book {
@@ -108,6 +127,10 @@ func Handler() http.Handler {
 	mux.HandleFunc("GET /demo/novel/search", func(w http.ResponseWriter, r *http.Request) {
 		tpl.ExecuteTemplate(w, "search", match(novels, r.URL.Query().Get("q")))
 	})
+	// The ranking lists every book, most chapters first.
+	mux.HandleFunc("GET /demo/novel/rank", func(w http.ResponseWriter, r *http.Request) {
+		tpl.ExecuteTemplate(w, "search", ranked(novels))
+	})
 	mux.HandleFunc("GET /demo/novel/book/{id}/{$}", func(w http.ResponseWriter, r *http.Request) {
 		b := find(novels, r.PathValue("id"))
 		if b == nil {
@@ -155,6 +178,13 @@ func Handler() http.Handler {
 	mux.HandleFunc("GET /demo/comic/api/search", func(w http.ResponseWriter, r *http.Request) {
 		list := []map[string]any{}
 		for _, b := range match(comics, r.URL.Query().Get("q")) {
+			list = append(list, comicJSON(b))
+		}
+		writeJSON(w, map[string]any{"list": list})
+	})
+	mux.HandleFunc("GET /demo/comic/api/rank", func(w http.ResponseWriter, r *http.Request) {
+		list := []map[string]any{}
+		for _, b := range ranked(comics) {
 			list = append(list, comicJSON(b))
 		}
 		writeJSON(w, map[string]any{"list": list})
@@ -248,6 +278,15 @@ func Sources(base string) []source.Source {
 				Cover:   "css:img@src",
 				Intro:   "css:.intro",
 			},
+			Recommend: &source.ListRule{
+				URL:     "/rank",
+				List:    "css:.result li",
+				Title:   "css:a.name",
+				URLRule: "css:a.name@href",
+				Author:  "css:.author",
+				Cover:   "css:img@src",
+				Intro:   "css:.intro",
+			},
 			Detail: source.DetailRule{
 				Title:  "css:#info h1",
 				Author: "css:#info .author##^作者：",
@@ -273,6 +312,10 @@ func Sources(base string) []source.Source {
 				Author:  "author",
 				Cover:   "cover",
 				Intro:   "desc",
+			},
+			Recommend: &source.ListRule{
+				URL: "/api/rank", List: "json:data.list", Title: "name", URLRule: "id##^##book/",
+				Author: "author", Cover: "cover", Intro: "desc",
 			},
 			Detail:  source.DetailRule{Title: "data.name", Author: "data.author", Cover: "data.cover", Intro: "data.desc"},
 			Toc:     source.TocRule{List: "data.chapters", Name: "name", URL: "path", Reverse: true},
