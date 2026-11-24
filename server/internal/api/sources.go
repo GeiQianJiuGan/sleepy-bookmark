@@ -164,6 +164,8 @@ func (s *Server) deleteSource(c echo.Context) error {
 	for _, bookID := range bookIDs {
 		s.disk.RemoveBook(bookID)
 	}
+	// The saved pages of its comics are of no use any more.
+	s.lib.ReleaseKept()
 	return c.NoContent(http.StatusNoContent)
 }
 

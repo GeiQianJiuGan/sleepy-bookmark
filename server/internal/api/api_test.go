@@ -722,4 +722,18 @@ func TestFavoritedComicIsSavedOnTheServer(t *testing.T) {
 	if c.files("kept") != 0 || c.files("img") != pages {
 		t.Fatalf("after leaving the shelf: %d cached, %d kept", c.files("img"), c.files("kept"))
 	}
+
+	// Back on the shelf the cached pages are kept again, until the source is deleted.
+	c.do("PUT", "/api/favorites/"+id, nil, nil)
+	for deadline := time.Now().Add(20 * time.Second); c.files("kept") != pages; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("back on the shelf: %d kept", c.files("kept"))
+		}
+	}
+	for _, src := range c.sources("?type=comic") {
+		c.do("DELETE", "/api/sources/"+itoa(src.ID), nil, nil)
+	}
+	if c.files("kept") != 0 {
+		t.Fatalf("after deleting the source: %d kept", c.files("kept"))
+	}
 }

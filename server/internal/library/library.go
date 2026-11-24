@@ -48,6 +48,7 @@ type Library struct {
 }
 
 func New(cfg config.Config, db *store.DB, disk *cache.Disk) *Library {
+	disk.KeptMax = cfg.KeptMaxMB << 20
 	return &Library{
 		cfg:        cfg,
 		db:         db,
@@ -403,9 +404,10 @@ func (l *Library) cacheChapter(ctx context.Context, b *store.Book, ch *store.Cha
 	if err != nil || !withImages || len(c.Images) == 0 {
 		return err
 	}
-	keep := l.db.Favorited(b.ID) && l.disk.KeptBytes() < l.cfg.KeptMaxMB<<20
+	keep := l.db.Favorited(b.ID)
 	for _, img := range c.Images {
-		if keep && l.disk.KeepImage(img) || !keep && l.disk.HasImage(img) {
+		// Without room among the kept images, one in the cache is as far as it goes.
+		if keep && l.disk.KeepImage(img) || l.disk.HasImage(img) {
 			continue
 		}
 		if _, err := l.fetchImage(ctx, b.SourceID, img, keep); err != nil {
@@ -602,21 +604,41 @@ func (l *Library) RemoveFavorite(userID, bookID int64) error {
 	if err := l.db.RemoveFavorite(userID, bookID); err != nil {
 		return err
 	}
-	b, err := l.db.Book(bookID)
-	if err != nil || b.Type != source.TypeComic || l.db.Favorited(bookID) {
-		return nil
+	if b, err := l.db.Book(bookID); err == nil && b.Type == source.TypeComic {
+		l.ReleaseKept()
 	}
-	chapters, err := l.db.Chapters(bookID)
+	return nil
+}
+
+// ReleaseKept hands back the kept images that no comic on a shelf has in a saved chapter any
+// more: the book left the shelf, its source was deleted, or its catalog dropped the chapter.
+// Going by what the shelves need now, rather than by the book that changed, also leaves alone
+// the pages that another comic on a shelf shares.
+func (l *Library) ReleaseKept() {
+	ids, err := l.db.FavoriteBookIDs()
 	if err != nil {
-		return nil
+		return
 	}
-	for _, ch := range chapters {
-		var c source.Content
-		if ch.Cached && l.disk.LoadChapter(bookID, ch.ID, &c) {
-			for _, img := range c.Images {
-				l.disk.ReleaseImage(img)
+	want := map[string]bool{}
+	for _, id := range ids {
+		b, err := l.db.Book(id)
+		if err != nil || b.Type != source.TypeComic {
+			continue
+		}
+		chapters, err := l.db.Chapters(id)
+		if err != nil {
+			return
+		}
+		for _, ch := range chapters {
+			var c source.Content
+			if ch.Cached && l.disk.LoadChapter(id, ch.ID, &c) {
+				for _, img := range c.Images {
+					want[cache.ImageName(img)] = true
+				}
 			}
 		}
 	}
-	return nil
+	if n := l.disk.ReleaseKept(want); n > 0 {
+		log.Printf("kept images: released %d that no shelf needs", n)
+	}
 }

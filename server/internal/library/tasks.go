@@ -116,6 +116,7 @@ func (l *Library) Run(ctx context.Context) {
 		case <-refresh.C:
 			l.refreshFavorites(ctx)
 		case <-evict.C:
+			l.ReleaseKept()
 			if n := l.disk.EvictImages(l.cfg.ImgCacheMaxMB << 20); n > 0 {
 				log.Printf("image cache: evicted %d files", n)
 			}
