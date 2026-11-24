@@ -29,20 +29,29 @@ const tabs = [
   z-index: 10;
   display: flex;
   justify-content: center;
-  background: #fff;
-  border-bottom: 1rpx solid #eee;
+  padding: 16rpx 0;
+  background: var(--paper);
 }
 
 .tab {
-  padding: 22rpx 60rpx 18rpx;
-  font-size: 30rpx;
-  color: #8a8a8a;
-  border-bottom: 4rpx solid transparent;
+  padding: 10rpx 56rpx;
+  font-size: 28rpx;
+  color: #8a8178;
+  background: #ebe6de;
+  transition: all 0.2s;
+
+  &:first-child {
+    border-radius: 32rpx 0 0 32rpx;
+  }
+
+  &:last-child {
+    border-radius: 0 32rpx 32rpx 0;
+  }
 
   &.active {
-    color: #c0392b;
+    color: #fff;
     font-weight: 600;
-    border-bottom-color: #c0392b;
+    background: var(--brand);
   }
 }
 </style>

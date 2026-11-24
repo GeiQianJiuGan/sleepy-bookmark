@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { api, type Book, type SearchResult } from '@/api'
-import { toastError } from '@/api/http'
+import { errorText } from '@/api/http'
 import { useAppStore } from '@/stores/app'
 import ModeSwitch from '@/components/ModeSwitch.vue'
 import BookItem from '@/components/BookItem.vue'
+import LoadState from '@/components/LoadState.vue'
 
 const store = useAppStore()
 const keyword = ref('')
@@ -12,18 +13,25 @@ const books = ref<Book[]>([])
 const errors = ref<SearchResult['errors']>([])
 const loading = ref(false)
 const searched = ref(false)
+const error = ref('')
+// Sources that did not answer are one quiet line; the details open on tap.
+const showErrors = ref(false)
 
 async function search() {
   const key = keyword.value.trim()
   if (!key) return
   loading.value = true
+  error.value = ''
+  showErrors.value = false
   try {
     const res = await api.search(store.mode, key)
     books.value = res.books
     errors.value = res.errors
     searched.value = true
   } catch (e) {
-    toastError(e)
+    books.value = []
+    errors.value = []
+    error.value = errorText(e)
   } finally {
     loading.value = false
   }
@@ -35,6 +43,7 @@ function reset() {
   books.value = []
   errors.value = []
   searched.value = false
+  error.value = ''
 }
 
 watch(
@@ -56,22 +65,35 @@ watch(
       @search="search"
       @clear="reset"
     />
-    <view v-if="loading" class="empty"><wd-loading /></view>
+    <LoadState v-if="loading || error" :loading="loading" :error="error" @retry="search" />
     <template v-else>
-      <view v-for="e in errors" :key="e.source" class="source-error">{{ e.source }}：{{ e.error }}</view>
       <view v-for="b in books" :key="b.id" @click="open(b)">
         <BookItem :book="b" show-intro />
       </view>
-      <view v-if="searched && !books.length" class="empty">没有找到结果，可以到「我的 › 书源管理」检查书源</view>
+      <LoadState
+        v-if="searched && !books.length"
+        :empty="errors.length ? '书源暂时都没有返回结果，稍后再试' : '没有找到相关内容，换个关键词试试'"
+      >
+        <wd-button custom-style="margin-top: 36rpx" size="small" plain @click="search">再搜一次</wd-button>
+      </LoadState>
+      <view v-if="errors.length" class="source-errors" @click="showErrors = !showErrors">
+        <view class="muted">{{ errors.length }} 个书源暂时没有返回结果 {{ showErrors ? '▴' : '▾' }}</view>
+        <template v-if="showErrors">
+          <view v-for="e in errors" :key="e.source" class="muted detail">{{ e.source }}：{{ e.error }}</view>
+        </template>
+      </view>
     </template>
   </view>
 </template>
 
 <style lang="scss" scoped>
-.source-error {
-  padding: 12rpx 24rpx;
-  font-size: 24rpx;
-  color: #b9770e;
-  background: #fef5e7;
+.source-errors {
+  padding: 28rpx 32rpx 48rpx;
+  text-align: center;
+
+  .detail {
+    margin-top: 12rpx;
+    text-align: left;
+  }
 }
 </style>

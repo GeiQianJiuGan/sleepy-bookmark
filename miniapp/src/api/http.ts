@@ -3,9 +3,19 @@ import { API_BASE } from '@/config'
 const TOKEN_KEY = 'token'
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /**
+   * @param status HTTP status, 0 when the server could not be reached.
+   * @param code   Kind of source failure reported by the server: timeout, network, busy,
+   *               blocked, not_found, http or rule. Empty for everything else.
+   */
+  constructor(public status: number, message: string, public code = '') {
     super(message)
   }
+}
+
+/** True when trying another source may help: the source site itself is failing. */
+export function sourceDown(e: unknown): boolean {
+  return e instanceof ApiError && ['timeout', 'network', 'busy', 'blocked', 'not_found'].includes(e.code)
 }
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
@@ -22,13 +32,16 @@ function send<T>(method: Method, path: string, data?: unknown, token?: string): 
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(res.data as T)
         } else {
-          reject(new ApiError(res.statusCode, (res.data as any)?.message || `请求失败（${res.statusCode}）`))
+          const body = res.data as any
+          reject(new ApiError(res.statusCode, body?.message || `请求失败（${res.statusCode}）`, body?.code || ''))
         }
       },
-      fail: (err) => reject(new ApiError(0, '网络不可用：' + (err.errMsg || ''))),
+      fail: () => reject(new ApiError(0, '连接不上服务器，请检查网络')),
     })
   })
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function loginCode(): Promise<string> {
   // #ifdef MP-WEIXIN
@@ -70,12 +83,22 @@ export async function request<T = void>(method: Method, path: string, data?: unk
   try {
     return await send<T>(method, path, data, await ensureLogin())
   } catch (e) {
-    if (!(e instanceof ApiError) || e.status !== 401) throw e
-    // The token expired or the server secret changed: log in again once.
-    uni.removeStorageSync(TOKEN_KEY)
+    if (!(e instanceof ApiError)) throw e
+    if (e.status === 401) {
+      // The token expired or the server secret changed: log in again once.
+      uni.removeStorageSync(TOKEN_KEY)
+    } else if (e.status === 0 && method === 'GET') {
+      // A dropped connection (switching networks, waking from the background) usually works
+      // on the second try, so reads do not bother the user with it.
+      await sleep(800)
+    } else {
+      throw e
+    }
     return send<T>(method, path, data, await ensureLogin())
   }
 }
+
+export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 /** Turns a server-relative path such as /api/img?... into an absolute URL. */
 export function absoluteUrl(path: string): string {
@@ -83,5 +106,5 @@ export function absoluteUrl(path: string): string {
 }
 
 export function toastError(e: unknown) {
-  uni.showToast({ title: e instanceof Error ? e.message : String(e), icon: 'none', duration: 3000 })
+  uni.showToast({ title: errorText(e), icon: 'none', duration: 2500 })
 }

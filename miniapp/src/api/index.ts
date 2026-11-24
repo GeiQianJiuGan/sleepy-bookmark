@@ -49,6 +49,8 @@ export interface Source {
   enabled: boolean
   updatedAt: number
   rule: Record<string, unknown>
+  /** Recent failures to reach the source; null while it works. */
+  health: { failures: number; lastError: string; lastErrorAt: number; pausedUntil: number } | null
 }
 
 export interface Task {
@@ -64,7 +66,8 @@ export interface Task {
 
 export interface SearchResult {
   books: Book[]
-  errors: { source: string; error: string }[]
+  /** Sources that returned nothing; kind is "paused" for one skipped after repeated failures. */
+  errors: { source: string; error: string; kind: string }[]
 }
 
 const q = encodeURIComponent
@@ -76,6 +79,10 @@ export const api = {
   chapters: (bookId: number, refresh = false) =>
     request<Chapter[]>('GET', `/books/${bookId}/chapters${refresh ? '?refresh=1' : ''}`),
   chapter: (id: number) => request<ChapterContent>('GET', `/chapters/${id}`),
+  /** The same book in other sources. */
+  alternatives: (bookId: number) => request<Book[]>('GET', `/books/${bookId}/alternatives`),
+  /** Moves the shelf entry and reading progress of a book to the same book in another source. */
+  switchSource: (bookId: number, to: number) => request('POST', `/books/${bookId}/switch`, { to }),
   cacheBook: (bookId: number) => request<Task>('POST', `/books/${bookId}/cache`),
   tasks: () => request<Task[]>('GET', '/tasks'),
 

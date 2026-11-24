@@ -10,9 +10,17 @@ onLaunch(() => {
 
 <style lang="scss">
 page {
-  background: #f5f5f5;
-  color: #222;
+  // Shared palette: warm paper background, one accent colour.
+  --brand: #c0392b;
+  --paper: #f6f3ee;
+  --line: #efeae2;
+  background: var(--paper);
+  color: #2b2622;
   font-size: 28rpx;
+}
+
+.link {
+  color: var(--brand);
 }
 
 .muted {

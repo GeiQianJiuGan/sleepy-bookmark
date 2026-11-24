@@ -2,20 +2,23 @@
 import { ref, watch } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { api, type Book } from '@/api'
-import { toastError } from '@/api/http'
+import { errorText, toastError } from '@/api/http'
 import { useAppStore } from '@/stores/app'
 import ModeSwitch from '@/components/ModeSwitch.vue'
 import BookItem from '@/components/BookItem.vue'
+import LoadState from '@/components/LoadState.vue'
 
 const store = useAppStore()
 const books = ref<Book[]>([])
 const loading = ref(true)
+const error = ref('')
 
 async function load() {
   try {
     books.value = await api.history(store.mode)
+    error.value = ''
   } catch (e) {
-    toastError(e)
+    error.value = errorText(e)
   } finally {
     loading.value = false
     uni.stopPullDownRefresh()
@@ -55,7 +58,7 @@ function remove(b?: Book) {
       <view class="muted">长按可删除单条记录</view>
       <wd-button size="small" plain type="error" @click="remove()">清空全部</wd-button>
     </view>
-    <view v-if="!loading && !books.length" class="empty">还没有浏览记录</view>
+    <LoadState v-if="!books.length" :loading="loading" :error="error" empty="还没有浏览记录" @retry="load" />
   </view>
 </template>
 
