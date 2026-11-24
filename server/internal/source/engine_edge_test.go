@@ -58,3 +58,23 @@ func TestRelativeLinksFollowRedirects(t *testing.T) {
 		t.Fatalf("cached toc: %+v, %v", toc, err)
 	}
 }
+
+func TestPageCacheIsPerHeadersAndCharset(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chapter/1", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<div id="content">` + r.Header.Get("X-Edition") + `</div>`))
+	})
+	e, src := site(t, mux)
+	read := func(edition string) string {
+		t.Helper()
+		src.Headers = map[string]string{"X-Edition": edition}
+		c, err := e.Content(context.Background(), src, src.BaseURL+"/chapter/1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.Text
+	}
+	if a, b := read("first"), read("second"); a != "first" || b != "second" {
+		t.Fatalf("got %q then %q", a, b)
+	}
+}

@@ -101,7 +101,9 @@ func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string,
 // Page fetches a text page and converts it to UTF-8. It also returns the page's final URL
 // after redirects, which is what relative links in the page are relative to.
 func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body string) ([]byte, string, error) {
-	key := method + " " + url + " " + body
+	// The charset and headers are part of the key: they change what the same URL returns,
+	// and they are what gets edited between two runs of a source test.
+	key := fmt.Sprintf("%s %s %s %s %v", method, url, body, src.Charset, src.Headers)
 	f.mu.Lock()
 	p, ok := f.pages[key]
 	f.mu.Unlock()
