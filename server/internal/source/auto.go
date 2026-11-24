@@ -629,7 +629,8 @@ func autoBody(doc *goquery.Selection) string {
 }
 
 // autoImages finds the pages of a comic chapter: the largest run of pictures that sit together,
-// or else the pictures that a script of the page lists.
+// or else the pictures that a script of the page lists, or else the one picture that a chapter
+// drawn as a single strip consists of.
 func autoImages(doc *goquery.Selection, base string) []string {
 	imgs := doc.Find("img")
 	count := map[*html.Node]int{}
@@ -669,7 +670,8 @@ func autoImages(doc *goquery.Selection, base string) []string {
 	})
 	// Pictures that are links are mostly the covers of other books: they are the pages only if
 	// nothing else is, neither pictures of their own nor a list in a script.
-	var plain, linked, listed []string
+	var plain, linked, listed, single []string
+	alone := 0
 	for _, box := range order {
 		r := runs[box]
 		into := &plain
@@ -679,6 +681,15 @@ func autoImages(doc *goquery.Selection, base string) []string {
 		if len(r.urls) >= 2 && len(r.urls) > len(*into) {
 			*into = r.urls
 		}
+		// A picture on its own is the chapter only if it is the only one that leads nowhere:
+		// among several there is no telling the strip from a banner.
+		if len(r.urls) == 1 && r.linked == 0 {
+			alone++
+			single = r.urls
+		}
+	}
+	if alone != 1 {
+		single = nil
 	}
 	doc.Find("script").Each(func(_ int, s *goquery.Selection) {
 		var urls []string
@@ -691,7 +702,7 @@ func autoImages(doc *goquery.Selection, base string) []string {
 			listed = urls
 		}
 	})
-	for _, found := range [][]string{plain, listed, linked} {
+	for _, found := range [][]string{plain, listed, single, linked} {
 		if found != nil {
 			return found
 		}

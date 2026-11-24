@@ -489,3 +489,23 @@ func TestWhatIsLearntAboutASiteIsNotUsedWithOtherHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestAChapterOfOnePictureIsRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var more strings.Builder
+		for _, b := range shelf {
+			fmt.Fprintf(&more, `<a href="/manga/%d"><img src="/cover/%d.jpg"></a>`, b.id, b.id)
+		}
+		fmt.Fprintf(w, frame, "", `<div class="reader"><p><img data-src="/strip/1.webp" src="/loading.gif"></p></div><div class="more">`+more.String()+`</div>`)
+	}))
+	defer srv.Close()
+	src := &source.Source{Name: "一话一张长图", Type: source.TypeComic, BaseURL: srv.URL, RateLimitMs: 1}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	c, err := e.Content(context.Background(), src, srv.URL+"/manga/1/1.html", "")
+	if err != nil || len(c.Images) != 1 || c.Images[0] != srv.URL+"/strip/1.webp" {
+		t.Fatalf("images = %v (%v), want the one strip", c.Images, err)
+	}
+}
