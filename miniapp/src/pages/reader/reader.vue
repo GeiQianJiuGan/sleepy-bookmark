@@ -2,7 +2,7 @@
 import { computed, getCurrentInstance, nextTick, ref } from 'vue'
 import { onHide, onLoad, onPageScroll, onReachBottom, onUnload } from '@dcloudio/uni-app'
 import { api, type Chapter, type ChapterContent } from '@/api'
-import { absoluteUrl, toastError } from '@/api/http'
+import { absoluteUrl, errorText, sourceDown } from '@/api/http'
 import { THEMES, useAppStore, type Theme } from '@/stores/app'
 import { offlineBook, offlineChapters, readOfflineChapter } from '@/utils/offline'
 
@@ -25,6 +25,8 @@ const chapters = ref<Chapter[]>([])
 const loaded = ref<Loaded[]>([])
 const loading = ref(false)
 const error = ref('')
+// Set when the failure is the source site's, so that switching source is worth offering.
+const canSwitch = ref(false)
 const panel = ref(false)
 const catalog = ref(false)
 
@@ -69,14 +71,16 @@ async function show(chapterId: number, position = 0) {
       : { scrollTop: position }
     setTimeout(() => uni.pageScrollTo({ ...target, duration: 0 }), 50)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = errorText(e)
+    canSwitch.value = sourceDown(e)
   } finally {
     loading.value = false
   }
 }
 
 function retry() {
-  if (loaded.value.length) appendNext()
+  if (!opened) open()
+  else if (loaded.value.length) appendNext()
   else show(wanted.chapterId, wanted.position)
 }
 
@@ -87,16 +91,21 @@ async function appendNext() {
   try {
     loaded.value.push(await fetchChapter(nextId.value))
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = errorText(e)
+    canSwitch.value = sourceDown(e)
   } finally {
     loading.value = false
   }
 }
 
-onLoad(async (query) => {
-  bookId = Number(query?.bookId)
-  let startId = Number(query?.chapterId) || 0
+let opened = false
+let firstChapter = 0
+
+async function open() {
+  let startId = firstChapter
   let position = 0
+  loading.value = true
+  error.value = ''
   try {
     const [book, list] = await Promise.all([api.book(bookId), api.chapters(bookId)])
     isComic.value = book.type === 'comic'
@@ -109,15 +118,28 @@ onLoad(async (query) => {
     // No network: fall back to what was downloaded to the device.
     const local = offlineBook(bookId)
     if (!local) {
-      toastError(e)
+      loading.value = false
+      error.value = errorText(e)
+      canSwitch.value = false
       return
     }
     isComic.value = local.book.type === 'comic'
     chapters.value = offlineChapters(bookId)
   }
+  opened = true
+  loading.value = false
   startId = startId || chapters.value[0]?.id
   if (startId) show(startId, position)
+  else error.value = '这本书还没有目录'
+}
+
+onLoad((query) => {
+  bookId = Number(query?.bookId)
+  firstChapter = Number(query?.chapterId) || 0
+  open()
 })
+
+const toSwitch = () => uni.redirectTo({ url: `/pages/book/detail?id=${bookId}&switch=1` })
 
 onReachBottom(appendNext)
 
@@ -209,8 +231,10 @@ function resize(delta: number) {
     <view class="tail">
       <wd-loading v-if="loading" />
       <template v-else-if="error">
-        <view class="error">{{ error }}</view>
-        <wd-button size="small" plain @click="retry">重试</wd-button>
+        <view class="error">{{ loaded.length ? '下一章' : '这一章' }}没有加载出来</view>
+        <view class="reason">{{ error }}</view>
+        <wd-button size="small" @click="retry">重试</wd-button>
+        <wd-button v-if="canSwitch" custom-style="margin-left: 24rpx" size="small" plain @click="toSwitch">换源</wd-button>
       </template>
       <wd-button v-else-if="nextId" size="small" plain @click="appendNext">下一章</wd-button>
       <view v-else-if="loaded.length" class="muted">已经是最后一章</view>
@@ -297,9 +321,13 @@ function resize(delta: number) {
   text-align: center;
 
   .error {
-    margin: 0 40rpx 24rpx;
-    font-size: 26rpx;
-    color: #c0392b;
+    font-size: 28rpx;
+  }
+
+  .reason {
+    margin: 12rpx 40rpx 32rpx;
+    font-size: 24rpx;
+    opacity: 0.6;
   }
 }
 
@@ -331,7 +359,7 @@ function resize(delta: number) {
     border-radius: 8rpx;
 
     &.active {
-      border-color: #c0392b;
+      border-color: var(--brand);
     }
   }
 }
@@ -348,7 +376,7 @@ function resize(delta: number) {
   border-bottom: 1rpx solid #f0f0f0;
 
   &.current {
-    color: #c0392b;
+    color: var(--brand);
   }
 }
 </style>

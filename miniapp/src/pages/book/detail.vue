@@ -2,7 +2,9 @@
 import { computed, ref } from 'vue'
 import { onLoad, onReachBottom, onShow } from '@dcloudio/uni-app'
 import { api, type Book, type Chapter } from '@/api'
-import { absoluteUrl, toastError } from '@/api/http'
+import { errorText, sourceDown, toastError } from '@/api/http'
+import BookCover from '@/components/BookCover.vue'
+import LoadState from '@/components/LoadState.vue'
 import { downloadChapters, offlineBook, offlineSupported } from '@/utils/offline'
 
 const PAGE = 100
@@ -11,6 +13,13 @@ let bookId = 0
 const book = ref<Book | null>(null)
 const chapters = ref<Chapter[]>([])
 const loadingToc = ref(true)
+const bookError = ref('')
+// Why the catalog is missing, and whether another source may have the book.
+const tocError = ref('')
+const tocSourceDown = ref(false)
+const alternatives = ref<Book[] | null>(null)
+const switching = ref(false)
+let openSwitch = false
 const reversed = ref(false)
 const shown = ref(PAGE)
 const downloaded = ref<Record<number, unknown>>({})
@@ -23,9 +32,10 @@ const visible = computed(() => ordered.value.slice(0, shown.value))
 async function loadBook() {
   try {
     book.value = await api.book(bookId)
+    bookError.value = ''
     uni.setNavigationBarTitle({ title: book.value.title })
   } catch (e) {
-    toastError(e)
+    if (!book.value) bookError.value = errorText(e)
   }
 }
 
@@ -33,16 +43,63 @@ async function loadToc(refresh = false) {
   loadingToc.value = true
   try {
     chapters.value = await api.chapters(bookId, refresh)
+    tocError.value = ''
   } catch (e) {
-    toastError(e)
+    if (chapters.value.length) {
+      // The catalog on screen is still good; a failed refresh is not worth more than a hint.
+      uni.showToast({ title: '暂时刷新不了，显示的是上次的目录', icon: 'none' })
+    } else {
+      tocError.value = errorText(e)
+      tocSourceDown.value = sourceDown(e)
+    }
   } finally {
     loadingToc.value = false
   }
 }
 
+/** Looks the book up in the other sources and lets the reader move to one of them. */
+async function switchSource() {
+  if (switching.value) return
+  switching.value = true
+  uni.showLoading({ title: '正在其他书源中查找' })
+  try {
+    alternatives.value = await api.alternatives(bookId)
+  } catch {
+    alternatives.value = []
+  } finally {
+    uni.hideLoading()
+    switching.value = false
+  }
+  const found = alternatives.value
+  if (!found.length) {
+    uni.showToast({ title: '其他书源里没有找到这本书', icon: 'none' })
+    return
+  }
+  uni.showActionSheet({
+    itemList: found.slice(0, 6).map((b) => `${b.sourceName} · ${b.author || '未知作者'}`),
+    success: async ({ tapIndex }) => {
+      const to = found[tapIndex]
+      uni.showLoading({ title: '正在换源' })
+      try {
+        await api.switchSource(bookId, to.id)
+        uni.hideLoading()
+        uni.redirectTo({ url: `/pages/book/detail?id=${to.id}` })
+      } catch (e) {
+        uni.hideLoading()
+        uni.showToast({ title: sourceDown(e) ? '这个书源也打不开，换一个试试' : errorText(e), icon: 'none' })
+      }
+    },
+  })
+}
+
 onLoad((query) => {
   bookId = Number(query?.id)
-  loadToc()
+  openSwitch = query?.switch === '1'
+  loadToc().then(() => {
+    // Sent here by the reader after a chapter would not load.
+    if (openSwitch) switchSource()
+    openSwitch = false
+  })
 })
 // Reload on every show so the reading progress is current after coming back from the reader.
 onShow(() => {
@@ -106,7 +163,7 @@ async function download() {
 <template>
   <view v-if="book">
     <view class="head">
-      <image v-if="book.cover" class="cover" :src="absoluteUrl(book.cover)" mode="aspectFill" />
+      <view class="cover"><BookCover :book="book" /></view>
       <view class="meta">
         <view class="title">{{ book.title }}</view>
         <view class="muted">{{ book.author || '未知作者' }}</view>
@@ -122,6 +179,7 @@ async function download() {
       <wd-button size="small" plain @click="toggleFavorite">{{ book.favorite ? '移出书架' : '加入书架' }}</wd-button>
       <wd-button v-if="offlineSupported" size="small" plain @click="download">{{ downloading || '离线下载' }}</wd-button>
       <wd-button size="small" plain @click="cacheOnServer">服务器缓存</wd-button>
+      <wd-button size="small" plain @click="switchSource">换源</wd-button>
     </view>
 
     <view class="toc-head">
@@ -131,14 +189,24 @@ async function download() {
         <text class="link" @click="reversed = !reversed">{{ reversed ? '正序' : '倒序' }}</text>
       </view>
     </view>
-    <view v-if="loadingToc" class="empty"><wd-loading /></view>
+    <LoadState
+      v-if="!chapters.length"
+      :loading="loadingToc"
+      :error="tocError"
+      empty="这本书还没有目录"
+      @retry="loadToc()"
+    >
+      <template v-if="tocSourceDown" #actions>
+        <wd-button size="small" plain @click="switchSource">换源</wd-button>
+      </template>
+    </LoadState>
     <view v-for="c in visible" :key="c.id" class="chapter" @click="read(c.id)">
       <text class="ellipsis" :class="{ current: book.progress?.chapterId === c.id }">{{ c.title }}</text>
       <text v-if="downloaded[c.id]" class="muted">已下载</text>
       <text v-else-if="c.cached" class="muted">已缓存</text>
     </view>
   </view>
-  <view v-else class="empty"><wd-loading /></view>
+  <LoadState v-else :loading="!bookError" :error="bookError" @retry="loadBook" />
 </template>
 
 <style lang="scss" scoped>
@@ -151,10 +219,7 @@ async function download() {
 .cover {
   flex: none;
   width: 200rpx;
-  height: 266rpx;
   margin-right: 28rpx;
-  border-radius: 8rpx;
-  background: #eee;
 }
 
 .meta {
@@ -196,7 +261,7 @@ async function download() {
   .link {
     margin-left: 32rpx;
     font-weight: 400;
-    color: #c0392b;
+    color: var(--brand);
   }
 }
 
@@ -213,7 +278,7 @@ async function download() {
   }
 
   .current {
-    color: #c0392b;
+    color: var(--brand);
   }
 
   .muted {

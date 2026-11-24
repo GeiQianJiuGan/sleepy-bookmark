@@ -82,6 +82,12 @@ docker compose up -d --build
 - 书架、历史和阅读进度保存在服务器
 - 离线下载：章节和漫画图片保存到小程序本地文件（上限约 200 MB），阅读时优先读本地
 - 服务器缓存：阅读时预抓后续章节，定时更新书架，全本缓存任务
+- 书源不稳定时的处理：
+  - 超时、连接失败、429、5xx 自动重试两次（遵守 `Retry-After`），请求带浏览器常见请求头并保留 Cookie
+  - 连续 3 次无法访问的书源，搜索时跳过 10 分钟，不拖慢其他书源；书源管理页会显示最近的失败原因
+  - 目录刷新失败时继续用上次的目录，已缓存的章节不受影响
+  - 换源：在详情页或阅读页把一本书换到其他书源里的同名书，书架和阅读进度一起迁移
+  - 页面内显示「重试」，不弹报错；网络抖动时读取类请求自动再试一次
 
 ## 接口
 
@@ -97,11 +103,15 @@ docker compose up -d --build
 | `GET /api/search?type=&q=&page=` | 搜索 |
 | `GET /api/books/:id`，`GET /api/books/:id/chapters?refresh=1` | 详情、目录 |
 | `GET /api/chapters/:id` | 正文或图片列表 |
+| `GET /api/books/:id/alternatives` | 其他书源里的同名书 |
+| `POST /api/books/:id/switch` | `{to}`，把书架和阅读进度换到另一个书源的同一本书 |
 | `POST /api/books/:id/cache`，`GET /api/tasks` | 全本缓存任务 |
 | `GET/PUT/DELETE /api/favorites` | 书架 |
 | `GET/PUT/DELETE /api/history` | 历史和阅读进度 |
 
+抓取书源失败时返回 502 和 `{message, code}`，`code` 为 `timeout`、`network`、`busy`、`blocked`、`not_found`、`http` 或 `rule`。服务器需要走代理访问书源时，设置环境变量 `HTTPS_PROXY` / `HTTP_PROXY`。
+
 ## 已知限制
 
-- 规则引擎不执行 JavaScript，需要 JS 渲染或有强反爬的站点不支持。
+- 规则引擎不执行 JavaScript，需要 JS 渲染或有强反爬（如 Cloudflare 人机验证）的站点不支持，会提示「访问验证」并建议换源。
 - 仓库里只带演示书源，真实书源需要自己按 `docs/source-rule.md` 编写。
