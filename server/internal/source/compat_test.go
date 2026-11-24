@@ -69,4 +69,26 @@ func TestParseSourceFlexibleLegado(t *testing.T) {
 	if _, err := ParseSourceFlexible([]byte(foreign)); err == nil {
 		t.Fatal("expected error for incomplete foreign object")
 	}
+
+	// Legado 2.0 / Yiciyuan flat-field comic source.
+	flatComic := `{
+		"bookSourceName": "扁平漫画源",
+		"bookSourceType": "漫画",
+		"bookSourceUrl": "https://flat.example.com",
+		"ruleSearchUrl": "/search?q=searchKey&p=searchPage",
+		"ruleSearchList": "class.card",
+		"ruleSearchName": "tag.a@text",
+		"ruleSearchNoteUrl": "tag.a@href",
+		"ruleChapterList": "-class.chapters@tag.a",
+		"ruleChapterName": "@text",
+		"ruleContentUrl": "@href",
+		"ruleBookContent": "img@data-original"
+	}`
+	fc, err := ParseSourceFlexible([]byte(flatComic))
+	if err != nil {
+		t.Fatalf("expected flat comic conversion success, got: %v", err)
+	}
+	if fc.Type != TypeComic || fc.Search.URL != "/search?q={{key}}&p={{page}}" || fc.Content.Images != "css:img@data-original" {
+		t.Fatalf("unexpected flat comic conversion: %+v", fc)
+	}
 }

@@ -56,14 +56,16 @@ type legadoSource struct {
 }
 
 // ParseSourceFlexible parses a native sleepy-bookmark rule, and falls back to converting a
-// declarative Legado (阅读) JSON rule when one has real rule blocks and no JavaScript.
+// declarative Legado 3.0 (nested) or Legado 2.0 / 异次元 (flat) JSON rule without JavaScript.
 func ParseSourceFlexible(raw []byte) (*Source, error) {
 	src, err := ParseSource(raw)
 	if err == nil {
 		return src, nil
 	}
-	converted, matched, convErr := convertLegado(raw)
-	if matched {
+	if converted, matched, convErr := convertLegado(raw); matched {
+		return converted, convErr
+	}
+	if converted, matched, convErr := convertLegadoFlat(raw); matched {
 		return converted, convErr
 	}
 	return src, err
@@ -377,4 +379,132 @@ func jsonPathToGJSON(p string) string {
 	p = strings.ReplaceAll(p, "[*].", ".#.")
 	p = strings.ReplaceAll(p, "[*]", ".#")
 	return p
+}
+
+// legadoFlatSource covers Legado 2.0 and Yiciyuan (异次元) flat-field comic/novel JSON rules.
+type legadoFlatSource struct {
+	BookSourceName     string `json:"bookSourceName"`
+	BookSourceURL      string `json:"bookSourceUrl"`
+	BookSourceType     any    `json:"bookSourceType"` // "漫画", "IMAGE", 2, or ""/0 for novel
+	HTTPUserAgent      string `json:"httpUserAgent"`
+	RuleSearchURL      string `json:"ruleSearchUrl"`
+	RuleSearchList     string `json:"ruleSearchList"`
+	RuleSearchName     string `json:"ruleSearchName"`
+	RuleSearchAuthor   string `json:"ruleSearchAuthor"`
+	RuleSearchNoteURL  string `json:"ruleSearchNoteUrl"`
+	RuleSearchCoverURL string `json:"ruleSearchCoverUrl"`
+	RuleBookName       string `json:"ruleBookName"`
+	RuleBookAuthor     string `json:"ruleBookAuthor"`
+	RuleCoverURL       string `json:"ruleCoverUrl"`
+	RuleIntroduce      string `json:"ruleIntroduce"`
+	RuleChapterURL     string `json:"ruleChapterUrl"`
+	RuleChapterList    string `json:"ruleChapterList"`
+	RuleChapterName    string `json:"ruleChapterName"`
+	RuleContentURL     string `json:"ruleContentUrl"`
+	RuleBookContent    string `json:"ruleBookContent"`
+}
+
+func convertLegadoFlat(raw []byte) (*Source, bool, error) {
+	var l legadoFlatSource
+	if err := json.Unmarshal(raw, &l); err != nil {
+		return nil, false, nil
+	}
+	l.BookSourceName = strings.TrimSpace(l.BookSourceName)
+	burl := strings.TrimSpace(l.BookSourceURL)
+	if i := strings.IndexByte(burl, '#'); i >= 0 {
+		burl = burl[:i]
+	}
+	burl = strings.TrimRight(burl, "/")
+	hasRules := strings.TrimSpace(l.RuleSearchList) != "" || strings.TrimSpace(l.RuleChapterList) != "" || strings.TrimSpace(l.RuleBookContent) != ""
+	if l.BookSourceName == "" || (!strings.HasPrefix(burl, "http://") && !strings.HasPrefix(burl, "https://")) || !hasRules {
+		return nil, false, nil
+	}
+
+	typ := TypeNovel
+	switch v := l.BookSourceType.(type) {
+	case float64:
+		if int(v) == 2 {
+			typ = TypeComic
+		} else if int(v) != 0 {
+			return nil, true, errors.New("仅支持小说和漫画类型的书源")
+		}
+	case string:
+		low := strings.ToLower(strings.TrimSpace(v))
+		if strings.Contains(low, "漫画") || strings.Contains(low, "comic") || strings.Contains(low, "image") {
+			typ = TypeComic
+		}
+	}
+
+	su := strings.TrimSpace(l.RuleSearchURL)
+	su = strings.ReplaceAll(su, "searchKey", "{{key}}")
+	su = strings.ReplaceAll(su, "searchPage", "{{page}}")
+	if strings.Contains(l.RuleBookContent, "_H006_") || strings.Contains(l.RuleChapterList, "_H006_") {
+		return nil, true, errors.New("该图源使用了异次元加密规则，无法直接解析")
+	}
+	if hasLegadoJS(su, l.RuleSearchList, l.RuleSearchName, l.RuleSearchNoteURL, l.RuleChapterList, l.RuleChapterName, l.RuleContentURL, l.RuleBookContent) {
+		return nil, true, errors.New("规则包含 JS 脚本，规则引擎不支持执行 JavaScript")
+	}
+
+	src := &Source{Name: l.BookSourceName, Type: typ, BaseURL: burl}
+	if ua := strings.TrimSpace(l.HTTPUserAgent); ua != "" && !hasLegadoJS(ua) {
+		src.Headers = map[string]string{"User-Agent": ua}
+	}
+
+	if su != "" {
+		if i := strings.Index(su, "|char="); i >= 0 {
+			src.Charset = strings.ToLower(strings.TrimSpace(su[i+len("|char="):]))
+			su = strings.TrimSpace(su[:i])
+		}
+		if i := strings.IndexByte(su, '@'); i >= 0 {
+			after := su[i+1:]
+			if strings.Contains(after, "=") && !strings.HasPrefix(after, "http") {
+				src.Search.Method = "POST"
+				src.Search.Body = after
+				su = strings.TrimSpace(su[:i])
+			}
+		}
+		src.Search.URL = su
+	}
+	if strings.TrimSpace(l.RuleSearchList) != "" {
+		src.Search.List = convertLegadoExpr(l.RuleSearchList, true)
+		src.Search.Title = convertLegadoExpr(l.RuleSearchName, false)
+		src.Search.URLRule = convertLegadoExpr(l.RuleSearchNoteURL, false)
+		src.Search.Author = convertLegadoExpr(l.RuleSearchAuthor, false)
+		src.Search.Cover = convertLegadoExpr(l.RuleSearchCoverURL, false)
+	}
+	src.Detail = DetailRule{
+		Title:  convertLegadoExpr(l.RuleBookName, false),
+		Author: convertLegadoExpr(l.RuleBookAuthor, false),
+		Cover:  convertLegadoExpr(l.RuleCoverURL, false),
+		Intro:  convertLegadoExpr(l.RuleIntroduce, false),
+		TocURL: convertLegadoExpr(l.RuleChapterURL, false),
+	}
+	if cl := strings.TrimSpace(l.RuleChapterList); cl != "" {
+		if strings.HasPrefix(cl, "-") {
+			src.Toc.Reverse = true
+			cl = strings.TrimPrefix(cl, "-")
+		}
+		src.Toc.List = convertLegadoExpr(cl, true)
+		src.Toc.Name = convertLegadoExpr(l.RuleChapterName, false)
+		src.Toc.URL = convertLegadoExpr(l.RuleContentURL, false)
+	}
+	if cb := strings.TrimSpace(l.RuleBookContent); cb != "" {
+		expr := convertLegadoExpr(cb, false)
+		if typ == TypeComic {
+			if strings.HasPrefix(expr, "css:") && !strings.Contains(expr, "@") {
+				if strings.Contains(expr, "img") {
+					expr += "@src"
+				} else {
+					expr += " img@src"
+				}
+			}
+			src.Content.Images = expr
+		} else {
+			src.Content.Body = expr
+		}
+	}
+	if err := src.Validate(); err != nil {
+		return nil, true, err
+	}
+	return src, true, nil
 }
