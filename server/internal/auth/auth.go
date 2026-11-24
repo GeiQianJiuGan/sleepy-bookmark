@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -38,6 +39,8 @@ type Auth struct {
 	cfg    config.Config
 	db     *store.DB
 	secret []byte
+	// loginMu makes "is this the first user?" and the registration one step.
+	loginMu sync.Mutex
 }
 
 // New loads the JWT secret from config, or creates and persists a random one in the data dir.
@@ -54,7 +57,7 @@ func New(cfg config.Config, db *store.DB) (*Auth, error) {
 			}
 		}
 	}
-	return &Auth{cfg, db, secret}, nil
+	return &Auth{cfg: cfg, db: db, secret: secret}, nil
 }
 
 // Login exchanges a wx.login code for a session token.
@@ -66,6 +69,8 @@ func (a *Auth) Login(ctx context.Context, code string) (string, error) {
 			return "", err
 		}
 	}
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
 	user, err := a.db.UserByOpenID(openid)
 	if errors.Is(err, store.ErrNotFound) {
 		if !a.mayRegister(openid) {
