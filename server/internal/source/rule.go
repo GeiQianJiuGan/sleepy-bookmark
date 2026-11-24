@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 )
 
@@ -162,8 +163,17 @@ func (s *Source) fillAuto() {
 	}
 }
 
-// IsAuto reports whether everything a source reads is left to recognition.
+// IsAuto reports whether a source is no more than a name, a type and an address, with all it
+// reads left to recognition. Headers, a charset or one rule make it a source written by hand.
 func (s *Source) IsAuto() bool {
-	return isAuto(s.Search.URL) && isAuto(s.Search.List) && isAuto(s.Toc.List) &&
-		(s.Type == TypeNovel && isAuto(s.Content.Body) || s.Type == TypeComic && isAuto(s.Content.Images))
+	plain := &Source{Name: s.Name, Type: s.Type, BaseURL: s.BaseURL}
+	plain.fillAuto()
+	own := *s
+	if len(own.Headers) == 0 {
+		own.Headers = nil
+	}
+	if len(own.Content.Purify) == 0 {
+		own.Content.Purify = nil
+	}
+	return reflect.DeepEqual(&own, plain)
 }

@@ -128,13 +128,14 @@ func autoSource(t *testing.T, kind string, site http.Handler) (*source.Engine, *
 	t.Helper()
 	srv := httptest.NewServer(site)
 	t.Cleanup(srv.Close)
-	src := &source.Source{Name: "只有名称和地址", Type: kind, BaseURL: srv.URL + "/", RateLimitMs: 1}
+	src := &source.Source{Name: "只有名称和地址", Type: kind, BaseURL: srv.URL + "/"}
 	if err := src.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if !src.IsAuto() {
 		t.Fatalf("a source of a name and an address is not left to recognition: %+v", src)
 	}
+	src.RateLimitMs = 1
 	return &source.Engine{Fetcher: source.NewFetcher()}, src
 }
 
@@ -418,5 +419,25 @@ func TestAnOlderLayoutIsReadToo(t *testing.T) {
 	if err != nil || !strings.Contains(c.Text, "钟声从港口") || !strings.Contains(c.Text, "守塔的人") ||
 		strings.Contains(c.Text, "加入书架") || strings.Contains(c.Text, "返回目录") || strings.Contains(c.Text, "frame") {
 		t.Fatalf("content: %q, %v", c.Text, err)
+	}
+}
+
+func TestASourceWithSettingsOfItsOwnIsNotAuto(t *testing.T) {
+	for rule, auto := range map[string]bool{
+		`{"name":"x","type":"novel","baseUrl":"https://x.invalid"}`:                                      true,
+		`{"name":"x","type":"comic","baseUrl":"https://x.invalid/","headers":{}}`:                        true,
+		`{"name":"x","type":"comic","baseUrl":"https://x.invalid","rateLimitMs":2000}`:                   false,
+		`{"name":"x","type":"novel","baseUrl":"https://x.invalid","toc":{"nextPage":"css:a.next@href"}}`: false,
+		`{"name":"x","type":"novel","baseUrl":"https://x.invalid","headers":{"Cookie":"a=1"}}`:           false,
+		`{"name":"x","type":"novel","baseUrl":"https://x.invalid","charset":"gbk"}`:                      false,
+		`{"name":"x","type":"novel","baseUrl":"https://x.invalid","detail":{"cover":"css:img@src"}}`:     false,
+	} {
+		src, err := source.ParseSource([]byte(rule))
+		if err != nil {
+			t.Fatalf("%s: %v", rule, err)
+		}
+		if src.IsAuto() != auto {
+			t.Errorf("%s: IsAuto = %v, want %v", rule, src.IsAuto(), auto)
+		}
 	}
 }
