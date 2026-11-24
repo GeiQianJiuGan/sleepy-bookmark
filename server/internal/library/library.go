@@ -90,6 +90,11 @@ type SearchError struct {
 
 var errPaused = errors.New("连续多次无法访问，暂时跳过")
 
+// maxVisits is how many sources one search or one round of rankings visits at a time.
+const maxVisits = 32
+
+var errNotReached = errors.New("书源太多，这次搜索没有轮到它，可以只选这个书源再搜")
+
 // SearchOptions narrows a search.
 type SearchOptions struct {
 	// SourceID searches one source only; zero searches every enabled source.
@@ -158,6 +163,8 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 		err   error
 	}
 	results := make([]result, len(rows))
+	// A subscribed list can bring thousands of sources; they are visited a few at a time.
+	visits := make(chan struct{}, maxVisits)
 	var wg sync.WaitGroup
 	for i, row := range rows {
 		wg.Add(1)
@@ -168,12 +175,31 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 				results[i].err = errPaused
 				return
 			}
+			queued := false
+			select {
+			case visits <- struct{}{}:
+			default:
+				queued = true
+				select {
+				case visits <- struct{}{}:
+				case <-ctx.Done():
+					results[i].err = errNotReached
+					return
+				}
+			}
+			defer func() { <-visits }()
 			src, err := parseSource(row)
 			if err == nil {
 				start := time.Now()
 				results[i].books, err = l.engine.Search(ctx, src, key, page)
-				l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(results[i].books) > 0, err)
-				l.health.note(row.ID, err)
+				// A visit that waited its turn had less than its time; running out of it
+				// says nothing about the site.
+				if queued && ctx.Err() != nil && err != nil {
+					err = errNotReached
+				} else {
+					l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(results[i].books) > 0, err)
+					l.health.note(row.ID, err)
+				}
 			}
 			results[i].err = err
 		}()
