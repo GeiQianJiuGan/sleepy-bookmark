@@ -59,13 +59,40 @@ func readRules(c echo.Context) ([]*source.Source, error) {
 	return out, nil
 }
 
+// createSources imports rules. A rule named like exactly one existing source of the same type
+// replaces that source's rule, so that re-importing a newer list keeps the shelf and the history.
 func (s *Server) createSources(c echo.Context) error {
 	rules, err := readRules(c)
 	if err != nil {
 		return err
 	}
-	ids := make([]int64, 0, len(rules))
+	existing, err := s.db.Sources("", false)
+	if err != nil {
+		return err
+	}
+	byName := map[string][]*store.SourceRow{}
+	for _, row := range existing {
+		byName[row.Type+"\x00"+row.Name] = append(byName[row.Type+"\x00"+row.Name], row)
+	}
+	// Two sources of one name could never be updated by a later import.
+	seen := map[string]bool{}
 	for _, src := range rules {
+		if seen[src.Type+"\x00"+src.Name] {
+			return badRequest("导入的列表里有重名的书源：" + src.Name)
+		}
+		seen[src.Type+"\x00"+src.Name] = true
+	}
+	ids := make([]int64, 0, len(rules))
+	updated := 0
+	for _, src := range rules {
+		if same := byName[src.Type+"\x00"+src.Name]; len(same) == 1 {
+			if err := s.replaceRule(same[0], src); err != nil {
+				return err
+			}
+			ids = append(ids, same[0].ID)
+			updated++
+			continue
+		}
 		raw, _ := json.Marshal(src)
 		id, err := s.db.CreateSource(src.Name, src.Type, string(raw))
 		if err != nil {
@@ -73,7 +100,7 @@ func (s *Server) createSources(c echo.Context) error {
 		}
 		ids = append(ids, id)
 	}
-	return c.JSON(http.StatusOK, echo.Map{"ids": ids})
+	return c.JSON(http.StatusOK, echo.Map{"ids": ids, "updated": updated})
 }
 
 func (s *Server) updateSource(c echo.Context) error {
@@ -92,14 +119,23 @@ func (s *Server) updateSource(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	raw, _ := json.Marshal(rules[0])
-	if err := s.db.UpdateSource(id, rules[0].Name, rules[0].Type, string(raw)); err != nil {
+	if err := s.replaceRule(row, rules[0]); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// replaceRule stores a new rule for an existing source and drops what the old rule fetched.
+func (s *Server) replaceRule(row *store.SourceRow, rule *source.Source) error {
+	id := row.ID
+	raw, _ := json.Marshal(rule)
+	if err := s.db.UpdateSource(id, rule.Name, rule.Type, string(raw)); err != nil {
 		return err
 	}
 	s.lib.ResetHealth(id)
 	// What was fetched with the old rule must not outlive it.
 	old, _ := source.ParseSource([]byte(row.Rule))
-	if catalog, content := rulesChanged(old, rules[0]); catalog {
+	if catalog, content := rulesChanged(old, rule); catalog {
 		if err := s.db.ResetSourceBooks(id, content); err != nil {
 			return err
 		}
@@ -113,7 +149,7 @@ func (s *Server) updateSource(c echo.Context) error {
 			}
 		}
 	}
-	return c.NoContent(http.StatusNoContent)
+	return nil
 }
 
 // rulesChanged reports whether an edit affects the stored catalogs of a source's books, and

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -800,5 +801,51 @@ func TestRefreshEndpoint(t *testing.T) {
 	c.token = next.RefreshToken
 	if code := c.do("GET", "/api/favorites", nil, nil); code != http.StatusUnauthorized {
 		t.Fatalf("request with a refresh token: got %d", code)
+	}
+}
+
+func TestImportReplacesTheSourceOfTheSameName(t *testing.T) {
+	c := newClient(t, config.Config{DevLogin: true})
+	var login struct{ Token string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &login)
+	c.token = login.Token
+
+	type row struct {
+		ID   int64
+		Name string
+		Rule json.RawMessage
+	}
+	var list []row
+	c.do("GET", "/api/sources", nil, &list)
+	var rule map[string]any
+	if err := json.Unmarshal(list[0].Rule, &rule); err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		IDs     []int64
+		Updated int
+	}
+	rule["rateLimitMs"] = 7
+	renamed := maps.Clone(rule)
+	renamed["name"] = "another name"
+	c.do("POST", "/api/sources", []any{rule, renamed}, &out)
+	if out.Updated != 1 || len(out.IDs) != 2 || out.IDs[0] != list[0].ID || out.IDs[1] == list[0].ID {
+		t.Fatalf("import: %+v, want the first rule to replace source %d", out, list[0].ID)
+	}
+	fresh := maps.Clone(rule)
+	fresh["name"] = "twice"
+	if code := c.do("POST", "/api/sources", []any{fresh, fresh}, nil); code != http.StatusBadRequest {
+		t.Errorf("a list naming one source twice: status %d, want 400", code)
+	}
+	var after []row
+	c.do("GET", "/api/sources", nil, &after)
+	if len(after) != len(list)+1 {
+		t.Fatalf("%d sources after the import, want %d", len(after), len(list)+1)
+	}
+	var stored map[string]any
+	_ = json.Unmarshal(after[0].Rule, &stored)
+	if after[0].ID != list[0].ID || stored["rateLimitMs"] != float64(7) {
+		t.Errorf("source %d was not updated in place: %s", list[0].ID, after[0].Rule)
 	}
 }

@@ -40,17 +40,29 @@ func parseDoc(body []byte) (Node, error) {
 
 type rule struct {
 	kind, expr, attr string
-	re               *regexp.Regexp
-	repl             string
+	subs             []sub
+}
+
+// sub is one ##regex##replacement step; a rule may chain several.
+type sub struct {
+	re   *regexp.Regexp
+	repl string
 }
 
 func parseRule(s, defaultKind string) rule {
 	r := rule{kind: defaultKind}
-	if parts := strings.SplitN(s, "##", 3); len(parts) > 1 {
+	if parts := strings.Split(s, "##"); len(parts) > 1 {
 		s = parts[0]
-		r.re, _ = regexp.Compile(parts[1])
-		if len(parts) == 3 {
-			r.repl = parts[2]
+		for i := 1; i < len(parts); i += 2 {
+			re, err := regexp.Compile(parts[i])
+			if err != nil {
+				continue
+			}
+			step := sub{re: re}
+			if i+1 < len(parts) {
+				step.repl = parts[i+1]
+			}
+			r.subs = append(r.subs, step)
 		}
 	}
 	for _, k := range []string{"css", "xpath", "json", "regex"} {
@@ -76,8 +88,8 @@ func parseRule(s, defaultKind string) rule {
 func (r rule) clean(values []string) []string {
 	out := values[:0]
 	for _, v := range values {
-		if r.re != nil {
-			v = r.re.ReplaceAllString(v, r.repl)
+		for _, step := range r.subs {
+			v = step.re.ReplaceAllString(v, step.repl)
 		}
 		if v = strings.TrimSpace(v); v != "" {
 			out = append(out, v)

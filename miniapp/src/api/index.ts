@@ -110,7 +110,7 @@ export const api = {
   removeHistory: (bookId?: number) => request('DELETE', bookId ? `/history/${bookId}` : '/history'),
 
   sources: (type?: Mode) => request<Source[]>('GET', type ? `/sources?type=${type}` : '/sources'),
-  createSources: (rules: unknown) => request<{ ids: number[] }>('POST', '/sources', rules),
+  createSources: (rules: unknown) => request<{ ids: number[]; updated?: number }>('POST', '/sources', rules),
   updateSource: (id: number, rule: unknown) => request('PUT', `/sources/${id}`, rule),
   setSourceEnabled: (id: number, enabled: boolean) => request('PUT', `/sources/${id}/enabled`, { enabled }),
   deleteSource: (id: number) => request('DELETE', `/sources/${id}`),

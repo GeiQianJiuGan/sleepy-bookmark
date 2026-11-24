@@ -231,3 +231,33 @@ func TestSearchKeywordUsesTheSiteCharset(t *testing.T) {
 		}
 	}
 }
+
+func TestRuleChainsReplacements(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<li><a href="/7/">small</a><b>作者：鲁迅</b></li><li><a href="/2832/">big</a><b>作者：老舍</b></li>`)
+	})
+	e, src := site(t, mux)
+	// The cover lives at /image/<id/1000>/<id>/<id>s.jpg; the second step fills in the 0 of a short id.
+	src.Search.Cover = `css:a@href##^.*?/(\d*?)(\d{1,3})/$##/image/${1}/${1}${2}/${1}${2}s.jpg##/image//##/image/0/`
+
+	for author, want := range map[string][]string{
+		"css:b##^作者：":     {"鲁迅", "老舍"},
+		"css:b##^作者：##著：": {"著：鲁迅", "著：老舍"},
+		"css:b##(##x":     {"作者：鲁迅", "作者：老舍"}, // a regex that does not compile is skipped
+	} {
+		src.Search.Author = author
+		books, err := e.Search(context.Background(), src, "x", 1)
+		if err != nil || len(books) != 2 {
+			t.Fatalf("%s: %v, %d books", author, err, len(books))
+		}
+		if got := []string{books[0].Author, books[1].Author}; !slices.Equal(got, want) {
+			t.Errorf("%s: authors %q, want %q", author, got, want)
+		}
+		covers := []string{books[0].Cover, books[1].Cover}
+		if want := []string{src.BaseURL + "/image/0/7/7s.jpg", src.BaseURL + "/image/2/2832/2832s.jpg"}; !slices.Equal(covers, want) {
+			t.Errorf("covers %q, want %q", covers, want)
+		}
+	}
+}

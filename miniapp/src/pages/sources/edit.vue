@@ -55,9 +55,14 @@ const save = () =>
   run(async () => {
     const rule = parse()
     // A new entry may be an array, which imports several sources at once.
+    let title = '已保存'
     if (id) await api.updateSource(id, rule)
-    else await api.createSources(rule)
-    uni.showToast({ title: '已保存', icon: 'none' })
+    else {
+      // A rule named like an existing source replaces it instead of adding a duplicate.
+      const { ids, updated = 0 } = await api.createSources(rule)
+      if (updated) title = ids.length > updated ? `新增 ${ids.length - updated} 个，更新 ${updated} 个` : `已更新 ${updated} 个同名书源`
+    }
+    uni.showToast({ title, icon: 'none' })
     setTimeout(() => uni.navigateBack(), 500)
   })
 
