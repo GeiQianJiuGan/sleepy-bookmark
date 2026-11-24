@@ -115,6 +115,7 @@ func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]Chapter
 		if err != nil {
 			return nil, err
 		}
+		seen[base] = true // a later link may name this page by the address it redirected to
 		for _, item := range doc.Find(src.Toc.List) {
 			c := ChapterInfo{Title: first(item, src.Toc.Name), URL: resolve(base, first(item, src.Toc.URL))}
 			if c.URL != "" {
@@ -148,6 +149,7 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 		if err != nil {
 			return c, err
 		}
+		seen[base] = true
 		if src.Type == TypeComic {
 			for _, img := range doc.Values(src.Content.Images) {
 				c.Images = append(c.Images, resolve(base, img))

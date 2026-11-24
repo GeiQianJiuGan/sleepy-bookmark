@@ -102,3 +102,24 @@ func TestTooManyPagesIsAnError(t *testing.T) {
 		t.Fatalf("content: got %d bytes and no error", len(c.Text))
 	}
 }
+
+// The last catalog page links back to the first one by its redirected address.
+func TestPaginationStopsAtARedirectedPageItAlreadyRead(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/toc", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/toc/", http.StatusFound)
+	})
+	mux.HandleFunc("/toc/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<div id="list"><a href="/c/1">one</a></div><a id="next" href="/toc/2">next</a>`))
+	})
+	mux.HandleFunc("/toc/2", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<div id="list"><a href="/c/2">two</a></div><a id="next" href="/toc/">next</a>`))
+	})
+	e, src := site(t, mux)
+	src.Toc.NextPage = "css:#next@href"
+
+	toc, err := e.Toc(context.Background(), src, src.BaseURL+"/toc")
+	if err != nil || len(toc) != 2 {
+		t.Fatalf("toc: %+v, %v", toc, err)
+	}
+}
