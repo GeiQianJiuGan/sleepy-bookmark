@@ -38,6 +38,13 @@ type Library struct {
 	monitor *sourceMonitor
 
 	recommends recommendCache
+	searches   searchCache
+	// Sources whose recommendation list is being read again in the background.
+	refreshMu     sync.Mutex
+	inRefresh     map[int64]bool
+	refreshVisits chan struct{}
+	// The rule of each source whose first list a request waited for.
+	waited map[int64]string
 
 	// background limits how many prefetch jobs run at once.
 	background chan struct{}
@@ -90,7 +97,7 @@ type SearchError struct {
 
 var errPaused = errors.New("连续多次无法访问，暂时跳过")
 
-// maxVisits is how many sources one search or one round of rankings visits at a time.
+// maxVisits is how many recommendation lists are read at a time.
 const maxVisits = 32
 
 var errNotReached = errors.New("书源太多，这次搜索没有轮到它，可以只选这个书源再搜")
@@ -109,7 +116,7 @@ type SearchOptions struct {
 func (l *Library) Search(ctx context.Context, typ, key string, page int, opt SearchOptions) ([]*store.Book, []SearchError, error) {
 	books, errs, err := l.search(ctx, typ, key, page, func(r *store.SourceRow) bool {
 		return opt.SourceID == 0 || r.ID == opt.SourceID
-	})
+	}, func(b *store.Book) bool { return !opt.Exact || exactTitle(b.Title, key) })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -146,87 +153,6 @@ func relevance(b *store.Book, key string) int {
 		return 3
 	}
 	return 4
-}
-
-func (l *Library) search(ctx context.Context, typ, key string, page int, want func(*store.SourceRow) bool) ([]*store.Book, []SearchError, error) {
-	rows, err := l.db.Sources(typ, true)
-	if err != nil {
-		return nil, nil, err
-	}
-	rows = slices.DeleteFunc(rows, func(r *store.SourceRow) bool { return !want(r) })
-	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
-	defer cancel()
-
-	type result struct {
-		row   *store.SourceRow
-		books []source.BookInfo
-		err   error
-	}
-	results := make([]result, len(rows))
-	// A subscribed list can bring thousands of sources; they are visited a few at a time.
-	visits := make(chan struct{}, maxVisits)
-	var wg sync.WaitGroup
-	for i, row := range rows {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i].row = row
-			if l.health.paused(row.ID) {
-				results[i].err = errPaused
-				return
-			}
-			queued := false
-			select {
-			case visits <- struct{}{}:
-			default:
-				queued = true
-				select {
-				case visits <- struct{}{}:
-				case <-ctx.Done():
-					results[i].err = errNotReached
-					return
-				}
-			}
-			defer func() { <-visits }()
-			src, err := parseSource(row)
-			if err == nil {
-				start := time.Now()
-				results[i].books, err = l.engine.Search(ctx, src, key, page)
-				// A visit that waited its turn had less than its time; running out of it
-				// says nothing about the site.
-				if queued && ctx.Err() != nil && err != nil {
-					err = errNotReached
-				} else {
-					l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(results[i].books) > 0, err)
-					l.health.note(row.ID, err)
-				}
-			}
-			results[i].err = err
-		}()
-	}
-	wg.Wait()
-
-	books := []*store.Book{}
-	errs := []SearchError{}
-	for _, r := range results {
-		if r.err != nil {
-			kind := source.Kind(r.err)
-			if r.err == errPaused {
-				kind = "paused"
-			}
-			errs = append(errs, SearchError{r.row.Name, r.err.Error(), kind})
-			continue
-		}
-		for _, info := range r.books {
-			b := &store.Book{SourceID: r.row.ID, SourceName: r.row.Name, Type: r.row.Type, URL: info.URL,
-				Title: info.Title, Author: info.Author, Cover: info.Cover, Intro: info.Intro, Latest: info.Latest}
-			if b.ID, err = l.db.UpsertBook(b); err != nil {
-				return nil, nil, err
-			}
-			books = append(books, b)
-		}
-	}
-	return books, errs, nil
 }
 
 // Book returns a book, loading its detail page the first time it is opened.
@@ -582,7 +508,8 @@ func (l *Library) Alternatives(ctx context.Context, bookID int64) ([]*store.Book
 	if err != nil {
 		return nil, err
 	}
-	found, _, err := l.search(ctx, b.Type, b.Title, 1, func(r *store.SourceRow) bool { return r.ID != b.SourceID })
+	found, _, err := l.search(ctx, b.Type, b.Title, 1, func(r *store.SourceRow) bool { return r.ID != b.SourceID },
+		func(x *store.Book) bool { return sameText(x.Title, b.Title) })
 	if err != nil {
 		return nil, err
 	}
