@@ -479,11 +479,13 @@ func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) 
 		return err
 	}
 	if p := from.Progress; p != nil && len(chapters) > 0 {
+		// Same title, and if several chapters have it, the one nearest to the old position;
+		// without a title match, the chapter at the old position.
 		target := chapters[min(p.ChapterIdx, len(chapters)-1)]
+		best := -1
 		for _, c := range chapters {
-			if sameText(c.Title, p.ChapterTitle) {
-				target = c
-				break
+			if d := max(c.Idx-p.ChapterIdx, p.ChapterIdx-c.Idx); sameText(c.Title, p.ChapterTitle) && (best < 0 || d < best) {
+				target, best = c, d
 			}
 		}
 		// The position inside the chapter does not carry over: pages differ between sources.
