@@ -676,19 +676,19 @@ func autoImages(doc *goquery.Selection, base string) []string {
 			}
 		}
 	})
-	// Pictures that lead nowhere are the pages before pictures that all lead to one place, which
-	// are pages that turn when clicked, or else a row of notices for one offer. Either is taken
-	// before what a script lists, which may be anything. Pictures that each lead somewhere else
-	// are mostly the covers of other books: they are the pages only if nothing else is, neither
-	// pictures of their own nor a list in a script.
+	// Pictures that lead nowhere are the pages before pictures that all lead on within the book,
+	// which are pages that turn when clicked. Either is taken before what a script lists, which
+	// may be anything. Pictures that lead elsewhere are a row of notices for one offer, or the
+	// covers of other books: they are the pages only if nothing else is, neither pictures of
+	// their own nor a list in a script.
 	var plain, turning, linked, listed, single []string
 	alone := 0
 	for _, box := range order {
 		r := runs[box]
 		into := &plain
 		if r.linked*2 > len(r.urls) {
-			if into = &turning; len(r.leads) > 1 {
-				into = &linked
+			if into = &linked; len(r.leads) == 1 && turns(base, r.leads[0]) {
+				into = &turning
 			}
 		}
 		if len(r.urls) >= 2 && len(r.urls) > len(*into) {
@@ -721,6 +721,30 @@ func autoImages(doc *goquery.Selection, base string) []string {
 		}
 	}
 	return nil
+}
+
+// turns tells whether a link on a chapter leads on within its book: to a page of the same kind,
+// to a later part of this one, or back to the book it belongs to.
+func turns(base, to string) bool {
+	from, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	u, err := url.Parse(to)
+	if err != nil || u.Host != from.Host {
+		return false
+	}
+	if u.Path == from.Path {
+		return u.RawQuery != from.RawQuery
+	}
+	if shape(u) == shape(from) {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(u.Path, stem(from)); ok && rest != "" && strings.ContainsRune("_-/", rune(rest[0])) {
+		return true
+	}
+	dir := strings.TrimSuffix(u.Path, "/") + "/"
+	return dir != "/" && strings.HasPrefix(from.Path, dir)
 }
 
 // endpoint is where a site takes a search, with {{key}} for the keyword.
