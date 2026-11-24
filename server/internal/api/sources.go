@@ -278,6 +278,17 @@ func (s *Server) testSource(c echo.Context) error {
 			return err
 		}
 		rules[0].Public = row.Listed
+	} else {
+		// Saved as a new source, it would be written over the one source of its name, and read
+		// as that one is.
+		existing, err := s.db.Sources("", false)
+		if err != nil {
+			return err
+		}
+		same := slices.DeleteFunc(existing, func(r *store.SourceRow) bool {
+			return nameKey(r.Type, r.Name) != nameKey(rules[0].Type, rules[0].Name)
+		})
+		rules[0].Public = len(same) == 1 && same[0].Listed
 	}
 	return c.JSON(http.StatusOK, s.lib.TestSource(c.Request().Context(), rules[0], key))
 }
