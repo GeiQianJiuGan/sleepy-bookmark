@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/api"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/auth"
@@ -18,6 +20,7 @@ import (
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/config"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/demo"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/library"
+	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
 
@@ -25,6 +28,8 @@ type client struct {
 	t     *testing.T
 	base  string
 	token string
+	// site is the demo site that the seeded sources point at.
+	site *httptest.Server
 }
 
 func (c *client) do(method, path string, body any, out any) int {
@@ -53,6 +58,190 @@ func (c *client) do(method, path string, body any, out any) int {
 	return resp.StatusCode
 }
 
+func TestMain(m *testing.M) {
+	source.RetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	os.Exit(m.Run())
+}
+
+// login starts a dev-login session and returns the client.
+func login(t *testing.T) *client {
+	t.Helper()
+	c := newClient(t, config.Config{DevLogin: true})
+	var out struct{ Token string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &out)
+	c.token = out.Token
+	return c
+}
+
+type sourceInfo struct {
+	ID     int64
+	Name   string
+	Rule   map[string]any
+	Health *struct {
+		Failures    int
+		LastError   string
+		PausedUntil int64
+	}
+}
+
+func (c *client) sources(query string) []sourceInfo {
+	c.t.Helper()
+	var list []sourceInfo
+	c.do("GET", "/api/sources"+query, nil, &list)
+	return list
+}
+
+// addCopy saves the demo novel source again under another name and base URL.
+func (c *client) addCopy(name, baseURL string) {
+	c.t.Helper()
+	rule := c.sources("?type=novel")[0].Rule
+	rule["name"] = name
+	if baseURL != "" {
+		rule["baseUrl"] = baseURL
+	}
+	if code := c.do("POST", "/api/sources", rule, nil); code >= 300 {
+		c.t.Fatalf("create source %q: %d", name, code)
+	}
+}
+
+type searchResult struct {
+	Books []struct {
+		ID         int64
+		Title      string
+		SourceName string
+	}
+	Errors []struct{ Source, Error, Kind string }
+}
+
+const qStar = "/api/search?type=novel&q=%E6%98%9F%E6%B2%B3" // 星河
+
+func TestDeadSourceIsPausedAndDoesNotBreakSearch(t *testing.T) {
+	c := login(t)
+	c.addCopy("dead", "http://127.0.0.1:1")
+
+	for i := 0; i < 3; i++ {
+		var r searchResult
+		c.do("GET", qStar, nil, &r)
+		if len(r.Books) != 1 || len(r.Errors) != 1 || r.Errors[0].Kind != "network" {
+			t.Fatalf("search %d: %+v", i, r)
+		}
+		if strings.Contains(r.Errors[0].Error, "127.0.0.1") {
+			t.Fatalf("error message shows the URL: %q", r.Errors[0].Error)
+		}
+	}
+	var r searchResult
+	c.do("GET", qStar, nil, &r)
+	if len(r.Books) != 1 || len(r.Errors) != 1 || r.Errors[0].Kind != "paused" {
+		t.Fatalf("search after three failures: %+v", r)
+	}
+
+	var dead sourceInfo
+	for _, s := range c.sources("") {
+		if s.Name == "dead" {
+			dead = s
+		} else if s.Health != nil {
+			t.Errorf("working source %q has health %+v", s.Name, s.Health)
+		}
+	}
+	if dead.Health == nil || dead.Health.Failures != 3 || dead.Health.PausedUntil == 0 {
+		t.Fatalf("dead source health: %+v", dead.Health)
+	}
+
+	// Saving the source again gives it a fresh chance.
+	c.do("PUT", "/api/sources/"+itoa(dead.ID)+"/enabled", map[string]bool{"enabled": true}, nil)
+	c.do("GET", qStar, nil, &r)
+	if len(r.Errors) != 1 || r.Errors[0].Kind != "network" {
+		t.Fatalf("search after reset: %+v", r.Errors)
+	}
+}
+
+func TestCatalogSurvivesASourceOutage(t *testing.T) {
+	c := login(t)
+	var r searchResult
+	c.do("GET", qStar, nil, &r)
+	path := "/api/books/" + itoa(r.Books[0].ID) + "/chapters"
+	var chapters []struct{ ID int64 }
+	c.do("GET", path, nil, &chapters)
+	if len(chapters) != 30 {
+		t.Fatalf("chapters: %d", len(chapters))
+	}
+
+	// A rule edit expires the stored catalog, and then the site goes down.
+	src := c.sources("?type=novel")[0]
+	src.Rule["headers"] = map[string]string{"X-Changed": "1"}
+	if code := c.do("PUT", "/api/sources/"+itoa(src.ID), src.Rule, nil); code != http.StatusNoContent {
+		t.Fatalf("update: %d", code)
+	}
+	c.site.Close()
+	// The book still opens with the catalog read earlier...
+	chapters = nil
+	if code := c.do("GET", path, nil, &chapters); code != 200 || len(chapters) != 30 {
+		t.Fatalf("catalog during outage: %d, %d chapters", code, len(chapters))
+	}
+	// ...and an explicit refresh says what is wrong, with a code the client can act on.
+	req, _ := http.NewRequest("GET", c.base+path+"?refresh=1", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var fail struct{ Message, Code string }
+	json.NewDecoder(resp.Body).Decode(&fail)
+	if resp.StatusCode != http.StatusBadGateway || fail.Code != "network" || fail.Message == "" || strings.Contains(fail.Message, "127.0.0.1") {
+		t.Fatalf("refresh during outage: %d %+v", resp.StatusCode, fail)
+	}
+}
+
+func TestSwitchSourceMovesShelfAndProgress(t *testing.T) {
+	c := login(t)
+	c.addCopy("mirror", "")
+	var r searchResult
+	c.do("GET", qStar, nil, &r)
+	if len(r.Books) != 2 {
+		t.Fatalf("search: %+v", r)
+	}
+	from := r.Books[0].ID
+
+	var chapters []struct {
+		ID    int64
+		Title string
+	}
+	c.do("GET", "/api/books/"+itoa(from)+"/chapters", nil, &chapters)
+	c.do("PUT", "/api/favorites/"+itoa(from), nil, nil)
+	c.do("PUT", "/api/history", map[string]any{"chapterId": chapters[6].ID, "position": 120}, nil)
+
+	var alts []struct {
+		ID         int64
+		SourceName string
+	}
+	c.do("GET", "/api/books/"+itoa(from)+"/alternatives", nil, &alts)
+	if len(alts) != 1 || alts[0].ID == from || alts[0].SourceName != "mirror" {
+		t.Fatalf("alternatives: %+v", alts)
+	}
+	to := alts[0].ID
+	if code := c.do("POST", "/api/books/"+itoa(from)+"/switch", map[string]int64{"to": to}, nil); code != http.StatusNoContent {
+		t.Fatalf("switch: %d", code)
+	}
+
+	var shelf []struct {
+		ID       int64
+		Progress *struct {
+			ChapterTitle string
+			Position     int
+		}
+	}
+	c.do("GET", "/api/favorites?type=novel", nil, &shelf)
+	if len(shelf) != 1 || shelf[0].ID != to || shelf[0].Progress == nil ||
+		shelf[0].Progress.ChapterTitle != chapters[6].Title || shelf[0].Progress.Position != 0 {
+		t.Fatalf("shelf after switch: %+v", shelf)
+	}
+	c.do("GET", "/api/history?type=novel", nil, &shelf)
+	if len(shelf) != 1 || shelf[0].ID != to {
+		t.Fatalf("history after switch: %+v", shelf)
+	}
+}
+
 func newClient(t *testing.T, cfg config.Config) *client {
 	t.Helper()
 	site := httptest.NewServer(demo.Handler())
@@ -78,7 +267,7 @@ func newClient(t *testing.T, cfg config.Config) *client {
 	}
 	srv := httptest.NewServer(api.New(db, a, lib, disk))
 	t.Cleanup(srv.Close)
-	return &client{t: t, base: srv.URL}
+	return &client{t: t, base: srv.URL, site: site}
 }
 
 func TestReadingFlow(t *testing.T) {

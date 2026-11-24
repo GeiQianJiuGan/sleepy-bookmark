@@ -10,6 +10,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/library"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
@@ -17,6 +18,8 @@ import (
 type sourceView struct {
 	*store.SourceRow
 	Rule json.RawMessage `json:"rule"`
+	// Health is null while the source works.
+	Health *library.Health `json:"health"`
 }
 
 func (s *Server) listSources(c echo.Context) error {
@@ -26,7 +29,7 @@ func (s *Server) listSources(c echo.Context) error {
 	}
 	out := make([]sourceView, len(rows))
 	for i, r := range rows {
-		out[i] = sourceView{r, json.RawMessage(r.Rule)}
+		out[i] = sourceView{r, json.RawMessage(r.Rule), s.lib.Health(r.ID)}
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -93,6 +96,7 @@ func (s *Server) updateSource(c echo.Context) error {
 	if err := s.db.UpdateSource(id, rules[0].Name, rules[0].Type, string(raw)); err != nil {
 		return err
 	}
+	s.lib.ResetHealth(id)
 	// What was fetched with the old rule must not outlive it.
 	old, _ := source.ParseSource([]byte(row.Rule))
 	if catalog, content := rulesChanged(old, rules[0]); catalog {
@@ -140,6 +144,7 @@ func (s *Server) toggleSource(c echo.Context) error {
 	if err := s.db.SetSourceEnabled(id, in.Enabled); err != nil {
 		return err
 	}
+	s.lib.ResetHealth(id)
 	return c.NoContent(http.StatusNoContent)
 }
 

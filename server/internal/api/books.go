@@ -84,6 +84,40 @@ func (s *Server) chapter(c echo.Context) error {
 	return c.JSON(http.StatusOK, &out)
 }
 
+// alternatives lists the same book in other sources, for switching away from a failing one.
+func (s *Server) alternatives(c echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	books, err := s.lib.Alternatives(c.Request().Context(), id)
+	if err != nil {
+		return err
+	}
+	for _, b := range books {
+		b.Cover = s.imgURL(b.SourceID, b.Cover)
+	}
+	return c.JSON(http.StatusOK, books)
+}
+
+// switchSource moves the user's shelf entry and reading progress to the book given as "to".
+func (s *Server) switchSource(c echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	var in struct {
+		To int64 `json:"to"`
+	}
+	if err := c.Bind(&in); err != nil || in.To == 0 || in.To == id {
+		return badRequest("缺少要换到的书籍 to")
+	}
+	if err := s.lib.SwitchSource(c.Request().Context(), auth.UserID(c), id, in.To); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (s *Server) cacheBook(c echo.Context) error {
 	id, err := pathID(c)
 	if err != nil {

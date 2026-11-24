@@ -2,10 +2,13 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,6 +33,7 @@ type Library struct {
 	disk   *cache.Disk
 	engine *source.Engine
 	flight singleflight.Group
+	health healthBook
 
 	// background limits how many prefetch jobs run at once.
 	background chan struct{}
@@ -64,14 +68,23 @@ func (l *Library) loadSource(id int64) (*source.Source, error) {
 type SearchError struct {
 	Source string `json:"source"`
 	Error  string `json:"error"`
+	// Kind is a source.Kind* value, or "paused" for a source skipped after repeated failures.
+	Kind string `json:"kind"`
 }
+
+var errPaused = errors.New("连续多次无法访问，暂时跳过")
 
 // Search queries every enabled source of the given type concurrently.
 func (l *Library) Search(ctx context.Context, typ, key string, page int) ([]*store.Book, []SearchError, error) {
+	return l.search(ctx, typ, key, page, 0)
+}
+
+func (l *Library) search(ctx context.Context, typ, key string, page int, exceptSource int64) ([]*store.Book, []SearchError, error) {
 	rows, err := l.db.Sources(typ, true)
 	if err != nil {
 		return nil, nil, err
 	}
+	rows = slices.DeleteFunc(rows, func(r *store.SourceRow) bool { return r.ID == exceptSource })
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
 
@@ -87,9 +100,14 @@ func (l *Library) Search(ctx context.Context, typ, key string, page int) ([]*sto
 		go func() {
 			defer wg.Done()
 			results[i].row = row
+			if l.health.paused(row.ID) {
+				results[i].err = errPaused
+				return
+			}
 			src, err := source.ParseSource([]byte(row.Rule))
 			if err == nil {
 				results[i].books, err = l.engine.Search(ctx, src, key, page)
+				l.health.note(row.ID, err)
 			}
 			results[i].err = err
 		}()
@@ -100,7 +118,11 @@ func (l *Library) Search(ctx context.Context, typ, key string, page int) ([]*sto
 	errs := []SearchError{}
 	for _, r := range results {
 		if r.err != nil {
-			errs = append(errs, SearchError{r.row.Name, r.err.Error()})
+			kind := source.Kind(r.err)
+			if r.err == errPaused {
+				kind = "paused"
+			}
+			errs = append(errs, SearchError{r.row.Name, r.err.Error(), kind})
 			continue
 		}
 		for _, info := range r.books {
@@ -128,6 +150,7 @@ func (l *Library) Book(ctx context.Context, id int64) (*store.Book, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	info, err := l.engine.Detail(ctx, src, b.URL)
+	l.health.note(b.SourceID, err)
 	if err != nil {
 		// The search result is still usable without the detail page.
 		log.Printf("detail %q: %v", b.Title, err)
@@ -157,10 +180,13 @@ func (l *Library) Chapters(ctx context.Context, bookID int64, refresh bool) ([]*
 	}
 	if refresh || time.Since(time.Unix(b.TocAt, 0)) > tocMaxAge {
 		if _, err := l.refreshToc(ctx, b); err != nil {
-			if b.TocAt == 0 || refresh {
+			// Unless a refresh was asked for, the catalog read earlier is better than an error.
+			list, dbErr := l.db.Chapters(bookID)
+			if refresh || dbErr != nil || len(list) == 0 {
 				return nil, err
 			}
 			log.Printf("refresh toc %q: %v", b.Title, err)
+			return list, nil
 		}
 	}
 	return l.db.Chapters(bookID)
@@ -176,6 +202,7 @@ func (l *Library) refreshToc(ctx context.Context, b *store.Book) ([]*store.Chapt
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
 		toc, err := l.engine.Toc(ctx, src, pick(b.TocURL, b.URL))
+		l.health.note(b.SourceID, err)
 		if err != nil {
 			return nil, err
 		}
@@ -275,6 +302,7 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 			stop = next.URL
 		}
 		c, err := l.engine.Content(ctx, src, ch.URL, stop)
+		l.health.note(b.SourceID, err)
 		if err != nil {
 			return nil, err
 		}
@@ -406,4 +434,70 @@ func (l *Library) SeedSource(src source.Source) error {
 	raw, _ := json.Marshal(src)
 	_, err := l.db.CreateSource(src.Name, src.Type, string(raw))
 	return err
+}
+
+// Alternatives looks for the same book in the other enabled sources, same author first.
+func (l *Library) Alternatives(ctx context.Context, bookID int64) ([]*store.Book, error) {
+	b, err := l.db.Book(bookID)
+	if err != nil {
+		return nil, err
+	}
+	found, _, err := l.search(ctx, b.Type, b.Title, 1, b.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := []*store.Book{}
+	for _, x := range found {
+		if sameText(x.Title, b.Title) {
+			out = append(out, x)
+		}
+	}
+	slices.SortStableFunc(out, func(x, y *store.Book) int {
+		return cmp.Compare(btoi(sameText(y.Author, b.Author)), btoi(sameText(x.Author, b.Author)))
+	})
+	return out, nil
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// SwitchSource moves a reader from a book to the same book in another source: the shelf entry
+// and the chapter being read, found by its title or else by its position in the catalog.
+func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) error {
+	from, err := l.db.ShelfBook(userID, fromID)
+	if err != nil {
+		return err
+	}
+	// Reading the catalog first proves that the new source works for this book.
+	chapters, err := l.Chapters(ctx, toID, false)
+	if err != nil {
+		return err
+	}
+	if p := from.Progress; p != nil && len(chapters) > 0 {
+		target := chapters[min(p.ChapterIdx, len(chapters)-1)]
+		for _, c := range chapters {
+			if sameText(c.Title, p.ChapterTitle) {
+				target = c
+				break
+			}
+		}
+		// The position inside the chapter does not carry over: pages differ between sources.
+		if err := l.db.SaveProgress(userID, toID, target.ID, 0); err != nil {
+			return err
+		}
+		if err := l.db.RemoveHistory(userID, fromID); err != nil {
+			return err
+		}
+	}
+	if from.Favorite {
+		if err := l.db.AddFavorite(userID, toID); err != nil {
+			return err
+		}
+		return l.db.RemoveFavorite(userID, fromID)
+	}
+	return nil
 }

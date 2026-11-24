@@ -13,6 +13,7 @@ import (
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/auth"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/cache"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/library"
+	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
 
@@ -46,6 +47,8 @@ func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *ec
 	g.GET("/search", s.search)
 	g.GET("/books/:id", s.book)
 	g.GET("/books/:id/chapters", s.chapters)
+	g.GET("/books/:id/alternatives", s.alternatives)
+	g.POST("/books/:id/switch", s.switchSource)
 	g.POST("/books/:id/cache", s.cacheBook)
 	g.GET("/chapters/:id", s.chapter)
 	g.GET("/tasks", s.tasks)
@@ -77,7 +80,8 @@ func errorHandler(err error, c echo.Context) {
 	case errors.Is(err, auth.ErrForbidden):
 		code = http.StatusForbidden
 	}
-	c.JSON(code, echo.Map{"message": err.Error()})
+	// code tells the client what kind of source failure this is (see source.Kind*), "" otherwise.
+	c.JSON(code, echo.Map{"message": err.Error(), "code": source.Kind(err)})
 }
 
 func badRequest(msg string) error { return echo.NewHTTPError(http.StatusBadRequest, msg) }
