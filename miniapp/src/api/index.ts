@@ -60,6 +60,9 @@ export interface SourceMetrics {
   sourceId: number
   sourceName?: string
   sourceType?: Mode
+  enabled?: boolean
+  autoDisabled?: boolean
+  autoAction?: '' | 'disabled' | 'enabled'
   total: number
   valid: number
   invalid: number
@@ -81,6 +84,9 @@ export interface SourceMetrics {
 
 export interface MonitorSummary {
   totalSources: number
+  enabledSources?: number
+  disabledSources?: number
+  autoDisabledSources?: number
   monitoredSources: number
   healthySources: number
   degradedSources: number
@@ -98,11 +104,18 @@ export interface MetricsReport {
   sources: SourceMetrics[]
 }
 
+export interface CheckReport extends MetricsReport {
+  autoDisabled?: string[]
+  autoEnabled?: string[]
+}
+
 export interface Source {
   id: number
   name: string
   type: Mode
   enabled: boolean
+  /** True when the server automatically disabled this source due to validRate < 50%. */
+  autoDisabled?: boolean
   updatedAt: number
   rule: Record<string, unknown>
   /** The source has no rules of its own: the server recognises its pages. */
@@ -192,6 +205,8 @@ export interface BookPage<T = Book> {
 }
 
 const q = encodeURIComponent
+/** Extended timeout (> backend's 2-minute subscription download limit) for sync & batch analysis. */
+const LONG_TIMEOUT = 130_000
 
 export const api = {
   /** Searches every enabled source, or only `source`; `exact` keeps the books of that very title. */
@@ -233,13 +248,17 @@ export const api = {
   deleteSource: (id: number) => request('DELETE', `/sources/${id}`),
   exportSources: (type?: Mode) => request<Record<string, unknown>[]>('GET', type ? `/sources/export?type=${type}` : '/sources/export'),
   sourceMetrics: (type?: Mode) => request<MetricsReport>('GET', type ? `/sources/metrics?type=${type}` : '/sources/metrics'),
+  checkSource: (id: number, keyword?: string) => {
+    const qs = `?id=${id}` + (keyword ? `&q=${q(keyword)}` : '')
+    return request<SourceMetrics>('POST', `/sources/monitor/check${qs}`, undefined, LONG_TIMEOUT)
+  },
   checkSources: (opt: { id?: number; type?: Mode; q?: string } = {}) => {
     const params: string[] = []
     if (opt.id) params.push(`id=${opt.id}`)
     if (opt.type) params.push(`type=${opt.type}`)
     if (opt.q) params.push(`q=${q(opt.q)}`)
     const qs = params.length ? `?${params.join('&')}` : ''
-    return request<MetricsReport | SourceMetrics>('POST', `/sources/monitor/check${qs}`)
+    return request<CheckReport>('POST', `/sources/monitor/check${qs}`, undefined, LONG_TIMEOUT)
   },
   resetSourceMetrics: (id: number) => request('DELETE', `/sources/${id}/metrics`),
   /**
@@ -251,9 +270,9 @@ export const api = {
 
   subscriptions: () => request<Subscription[]>('GET', '/subscriptions'),
   /** Subscribing to a URL that is subscribed already syncs it. */
-  subscribe: (url: string) => request<SyncResult>('POST', '/subscriptions', { url }),
-  syncSubscription: (id: number) => request<SyncResult>('POST', `/subscriptions/${id}/sync`),
-  syncAllSubscriptions: () => request<SyncAllResult>('POST', '/subscriptions/sync-all'),
+  subscribe: (url: string) => request<SyncResult>('POST', '/subscriptions', { url }, LONG_TIMEOUT),
+  syncSubscription: (id: number) => request<SyncResult>('POST', `/subscriptions/${id}/sync`, undefined, LONG_TIMEOUT),
+  syncAllSubscriptions: () => request<SyncAllResult>('POST', '/subscriptions/sync-all', undefined, LONG_TIMEOUT),
   deleteSubscription: (id: number, withSources: boolean) =>
     request('DELETE', `/subscriptions/${id}${withSources ? '?sources=1' : ''}`),
 }

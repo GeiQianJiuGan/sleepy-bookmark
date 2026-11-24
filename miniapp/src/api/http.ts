@@ -24,14 +24,14 @@ export function sourceDown(e: unknown): boolean {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
-function send<T>(method: Method, path: string, data?: unknown, token?: string): Promise<T> {
+function send<T>(method: Method, path: string, data?: unknown, token?: string, timeout = REQUEST_TIMEOUT): Promise<T> {
   return new Promise((resolve, reject) => {
     uni.request({
       url: API_BASE + '/api' + path,
       method,
       data: data as any,
       header: token ? { Authorization: 'Bearer ' + token } : {},
-      timeout: REQUEST_TIMEOUT,
+      timeout,
       success: (res) => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(res.data as T)
@@ -184,20 +184,20 @@ export function logout() {
   toLogin()
 }
 
-export async function request<T = void>(method: Method, path: string, data?: unknown): Promise<T> {
+export async function request<T = void>(method: Method, path: string, data?: unknown, timeout?: number): Promise<T> {
   try {
-    return await send<T>(method, path, data, await accessToken())
+    return await send<T>(method, path, data, await accessToken(), timeout)
   } catch (e) {
     if (!(e instanceof ApiError)) throw e
     if (e.status === 401 && hasSession()) {
       // The access token was refused (expired early, server secret changed): renew it once.
-      return send<T>(method, path, data, await refreshSession())
+      return send<T>(method, path, data, await refreshSession(), timeout)
     }
     if (e.status === 0 && method === 'GET') {
       // A dropped connection (switching networks, waking from the background) usually works
       // on the second try, so reads do not bother the user with it.
       await sleep(800)
-      return send<T>(method, path, data, await accessToken())
+      return send<T>(method, path, data, await accessToken(), timeout)
     }
     throw e
   }

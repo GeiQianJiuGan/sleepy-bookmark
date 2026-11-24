@@ -6,6 +6,7 @@ import { errorText, sourceDown, toastError } from '@/api/http'
 import BookCover from '@/components/BookCover.vue'
 import LoadState from '@/components/LoadState.vue'
 import { downloadChapters, offlineBook, offlineSupported } from '@/utils/offline'
+import { getReadPosition } from '@/utils/readPosition'
 
 const PAGE = 100
 
@@ -29,6 +30,21 @@ const signal = { cancelled: false }
 
 const ordered = computed(() => (reversed.value ? [...chapters.value].reverse() : chapters.value))
 const visible = computed(() => ordered.value.slice(0, shown.value))
+const localPos = ref<ReturnType<typeof getReadPosition>>(null)
+const currentChapterId = computed(() => {
+  const lp = localPos.value
+  const sp = book.value?.progress
+  const serverAt = sp ? (sp.updatedAt || 0) * 1000 : 0
+  if (lp && (!sp || lp.at >= serverAt - 2000)) return lp.chapterId
+  return sp?.chapterId || 0
+})
+const currentChapterTitle = computed(() => {
+  const lp = localPos.value
+  const sp = book.value?.progress
+  const serverAt = sp ? (sp.updatedAt || 0) * 1000 : 0
+  if (lp?.chapterTitle && (!sp || lp.at >= serverAt - 2000)) return lp.chapterTitle
+  return sp?.chapterTitle || ''
+})
 
 async function loadBook() {
   try {
@@ -109,6 +125,7 @@ onLoad((query) => {
 // Reload on every show so the reading progress is current after coming back from the reader.
 onShow(() => {
   loadBook()
+  localPos.value = getReadPosition(bookId)
   downloaded.value = offlineBook(bookId)?.chapters || {}
 })
 onReachBottom(() => {
@@ -174,7 +191,7 @@ async function download() {
         <view class="muted">{{ book.author || '未知作者' }}</view>
         <view class="muted">来源：{{ book.sourceName }}</view>
         <view v-if="book.latest" class="muted ellipsis">最新：{{ book.latest }}</view>
-        <view v-if="book.progress" class="muted ellipsis">读到：{{ book.progress.chapterTitle }}</view>
+        <view v-if="currentChapterTitle" class="muted ellipsis">读到：{{ currentChapterTitle }}</view>
       </view>
     </view>
     <view v-if="book.intro" class="intro" :class="{ folded: !introOpen }" @click="introOpen = !introOpen">
@@ -182,7 +199,7 @@ async function download() {
     </view>
 
     <view class="actions">
-      <wd-button size="small" :disabled="!chapters.length" @click="read()">{{ book.progress ? '继续阅读' : '开始阅读' }}</wd-button>
+      <wd-button size="small" :disabled="!chapters.length" @click="read()">{{ currentChapterId ? '继续阅读' : '开始阅读' }}</wd-button>
       <wd-button size="small" plain @click="toggleFavorite">{{ book.favorite ? '移出书架' : '加入书架' }}</wd-button>
       <wd-button v-if="offlineSupported" size="small" plain @click="download">{{ downloading || '离线下载' }}</wd-button>
       <wd-button size="small" plain @click="cacheOnServer">服务器缓存</wd-button>
@@ -208,7 +225,7 @@ async function download() {
       </template>
     </LoadState>
     <view v-for="c in visible" :key="c.id" class="chapter" @click="read(c.id)">
-      <text class="ellipsis" :class="{ current: book.progress?.chapterId === c.id }">{{ c.title }}</text>
+      <text class="ellipsis" :class="{ current: currentChapterId === c.id }">{{ c.title }}</text>
       <text v-if="downloaded[c.id]" class="muted">已下载</text>
       <text v-else-if="c.cached" class="muted">已缓存</text>
     </view>

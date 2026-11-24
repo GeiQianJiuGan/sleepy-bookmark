@@ -88,3 +88,69 @@ func TestSourceBundleImportSkipInvalidAndExport(t *testing.T) {
 		t.Fatalf("expected at least 3 exported sources, got %d", len(exported))
 	}
 }
+
+func TestAutoDisableLowAccuracyAndRecoverOnManualAnalyze(t *testing.T) {
+	c := login(t)
+	c.addCopy("flaky", "http://127.0.0.1:1")
+
+	var flakyID int64
+	for _, s := range c.sources("") {
+		if s.Name == "flaky" {
+			flakyID = s.ID
+		}
+	}
+	if flakyID == 0 {
+		t.Fatal("flaky source not found")
+	}
+
+	// Manual batch analysis probes flaky -> 0% valid rate -> auto-disabled.
+	var batch struct {
+		AutoDisabled []string `json:"autoDisabled"`
+		AutoEnabled  []string `json:"autoEnabled"`
+	}
+	if code := c.do("POST", "/api/sources/monitor/check?q=%E6%98%9F%E6%B2%B3", nil, &batch); code != http.StatusOK {
+		t.Fatalf("batch check: %d", code)
+	}
+	if len(batch.AutoDisabled) != 1 || batch.AutoDisabled[0] != "flaky" {
+		t.Fatalf("expected flaky to be auto-disabled, got %+v", batch)
+	}
+
+	var list []struct {
+		ID           int64 `json:"id"`
+		Name         string `json:"name"`
+		Enabled      bool `json:"enabled"`
+		AutoDisabled bool `json:"autoDisabled"`
+		Rule         map[string]any `json:"rule"`
+	}
+	c.do("GET", "/api/sources", nil, &list)
+	var flakyRule map[string]any
+	for _, s := range list {
+		if s.ID == flakyID {
+			if s.Enabled || !s.AutoDisabled {
+				t.Fatalf("expected flaky disabled+autoDisabled, got enabled=%v autoDisabled=%v", s.Enabled, s.AutoDisabled)
+			}
+			flakyRule = s.Rule
+		}
+	}
+
+	// Fix flaky's baseUrl so it works again, then run manual batch analysis: it should auto-enable.
+	flakyRule["baseUrl"] = c.site.URL + "/demo/novel"
+	if code := c.do("PUT", fmt.Sprintf("/api/sources/%d", flakyID), flakyRule, nil); code != http.StatusNoContent {
+		t.Fatalf("update flaky rule: %d", code)
+	}
+	batch.AutoDisabled = nil
+	batch.AutoEnabled = nil
+	if code := c.do("POST", "/api/sources/monitor/check?q=%E6%98%9F%E6%B2%B3", nil, &batch); code != http.StatusOK {
+		t.Fatalf("recovery batch check: %d", code)
+	}
+	if len(batch.AutoEnabled) != 1 || batch.AutoEnabled[0] != "flaky" {
+		t.Fatalf("expected flaky to auto-enable after recovery, got %+v", batch)
+	}
+	list = nil
+	c.do("GET", "/api/sources", nil, &list)
+	for _, s := range list {
+		if s.ID == flakyID && (!s.Enabled || s.AutoDisabled) {
+			t.Fatalf("expected flaky enabled after recovery, got enabled=%v autoDisabled=%v", s.Enabled, s.AutoDisabled)
+		}
+	}
+}

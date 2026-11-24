@@ -4,6 +4,7 @@ import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { api, type Book } from '@/api'
 import { errorText, toastError } from '@/api/http'
 import { useAppStore } from '@/stores/app'
+import { clearReadPositions, removeReadPosition } from '@/utils/readPosition'
 import AppBar from '@/components/AppBar.vue'
 import BookItem from '@/components/BookItem.vue'
 import LoadState from '@/components/LoadState.vue'
@@ -41,6 +42,8 @@ function remove(b?: Book) {
       if (!confirm) return
       try {
         await api.removeHistory(b?.id)
+        if (b) removeReadPosition(b.id)
+        else clearReadPositions()
         await load()
       } catch (e) {
         toastError(e)

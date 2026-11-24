@@ -106,6 +106,7 @@ func Open(path string) (*DB, error) {
 	for _, col := range [][2]string{
 		{"subscription_id", "INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL"},
 		{"listed", "INTEGER NOT NULL DEFAULT 0"},
+		{"auto_disabled", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var has int
 		err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name = ?`, col[0]).Scan(&has)
@@ -176,13 +177,15 @@ type SourceRow struct {
 	// Listed is set for good on a source that a subscribed list wrote, whether or not the
 	// subscription is still there: such a source is read from public addresses only.
 	Listed bool `json:"-"`
+	// AutoDisabled is true when the source was automatically disabled because its valid rate dropped below 50%.
+	AutoDisabled bool `json:"autoDisabled,omitempty"`
 }
 
-const sourceCols = `id, name, type, enabled, rule, updated_at, COALESCE(subscription_id, 0), listed`
+const sourceCols = `id, name, type, enabled, rule, updated_at, COALESCE(subscription_id, 0), listed, auto_disabled`
 
 func scanSource(s interface{ Scan(...any) error }) (*SourceRow, error) {
 	var r SourceRow
-	err := s.Scan(&r.ID, &r.Name, &r.Type, &r.Enabled, &r.Rule, &r.UpdatedAt, &r.SubscriptionID, &r.Listed)
+	err := s.Scan(&r.ID, &r.Name, &r.Type, &r.Enabled, &r.Rule, &r.UpdatedAt, &r.SubscriptionID, &r.Listed, &r.AutoDisabled)
 	return &r, notFound(err)
 }
 
@@ -229,7 +232,12 @@ func (d *DB) UpdateSource(id int64, name, typ, rule string) error {
 }
 
 func (d *DB) SetSourceEnabled(id int64, enabled bool) error {
-	_, err := d.Exec(`UPDATE sources SET enabled = ? WHERE id = ?`, enabled, id)
+	_, err := d.Exec(`UPDATE sources SET enabled = ?, auto_disabled = 0 WHERE id = ?`, enabled, id)
+	return err
+}
+
+func (d *DB) SetSourceAutoState(id int64, enabled, autoDisabled bool) error {
+	_, err := d.Exec(`UPDATE sources SET enabled = ?, auto_disabled = ? WHERE id = ?`, enabled, autoDisabled, id)
 	return err
 }
 

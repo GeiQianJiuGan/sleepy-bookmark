@@ -59,4 +59,28 @@ func TestSourceMonitorMetricsAndPersistence(t *testing.T) {
 	if reloaded.Get(sid) != nil {
 		t.Fatal("expected nil after reset")
 	}
+
+	// At exactly 50% (2/4), source remains enabled; dropping below 50% (2/5 = 40%) auto-disables it.
+	mon2 := newSourceMonitor(db)
+	mon2.Record(sid, ActionSearch, 100*time.Millisecond, true, nil)
+	mon2.Record(sid, ActionSearch, 100*time.Millisecond, true, nil)
+	mon2.Record(sid, ActionSearch, 100*time.Millisecond, false, nil)
+	mon2.Record(sid, ActionSearch, 100*time.Millisecond, false, nil)
+	row, err := db.Source(sid)
+	if err != nil || !row.Enabled || row.AutoDisabled {
+		t.Fatalf("expected source to stay enabled at 50%%, got row=%+v err=%v", row, err)
+	}
+	mon2.Record(sid, ActionSearch, 100*time.Millisecond, false, nil)
+	row, err = db.Source(sid)
+	if err != nil || row.Enabled || !row.AutoDisabled {
+		t.Fatalf("expected source to be auto-disabled below 50%%, got row=%+v err=%v", row, err)
+	}
+	// Manual toggle clears autoDisabled.
+	if err := db.SetSourceEnabled(sid, true); err != nil {
+		t.Fatal(err)
+	}
+	row, err = db.Source(sid)
+	if err != nil || !row.Enabled || row.AutoDisabled {
+		t.Fatalf("expected manual enable to clear autoDisabled, got row=%+v err=%v", row, err)
+	}
 }

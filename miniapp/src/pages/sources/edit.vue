@@ -17,6 +17,8 @@ let handWritten = false
 const keyword = ref('')
 const report = ref<TestReport | null>(null)
 const metrics = ref<SourceMetrics | null>(null)
+const enabled = ref(true)
+const autoDisabled = ref(false)
 const checking = ref(false)
 const testing = ref(false)
 const busy = ref(false)
@@ -33,6 +35,8 @@ onLoad(async (query) => {
     if (!src) return
     name.value = src.name
     type.value = src.type
+    enabled.value = src.enabled
+    autoDisabled.value = Boolean(src.autoDisabled)
     baseUrl.value = String(src.rule.baseUrl ?? '')
     text.value = JSON.stringify(src.rule, null, 2)
     metrics.value = src.metrics ?? null
@@ -121,8 +125,17 @@ async function checkNow() {
   if (!sourceId.value || checking.value) return
   checking.value = true
   try {
-    metrics.value = (await api.checkSources({ id: sourceId.value, q: keyword.value.trim() || undefined })) as SourceMetrics
-    uni.showToast({ title: '检测完成', icon: 'none' })
+    const m = await api.checkSource(sourceId.value, keyword.value.trim() || undefined)
+    metrics.value = m
+    if (typeof m.enabled === 'boolean') enabled.value = m.enabled
+    autoDisabled.value = Boolean(m.autoDisabled)
+    if (m.autoAction === 'enabled') {
+      uni.showToast({ title: '准确率已恢复，已自动重新开启', icon: 'none', duration: 2400 })
+    } else if (m.autoAction === 'disabled') {
+      uni.showToast({ title: '准确率低于 50%，已自动停用', icon: 'none', duration: 2400 })
+    } else {
+      uni.showToast({ title: '分析完成', icon: 'none' })
+    }
   } catch (e) {
     toastError(e)
   } finally {
@@ -150,7 +163,8 @@ const ACTION_LABELS: Record<string, string> = {
   image: '图片',
 }
 
-const pct = (n: number) => `${Math.round(n * 100)}%`
+const pct = (n: number) => `${Math.round((n || 0) * 100)}%`
+const rateClass = (n: number) => (n >= 0.8 ? 'good' : n >= 0.5 ? 'warn' : 'bad')
 
 const actionRows = computed(() => {
   if (!metrics.value?.actions) return []
@@ -305,13 +319,21 @@ const lines = computed(() => {
 
     <view v-if="sourceId" class="monitor-box">
       <view class="monitor-head">
-        <text class="monitor-title">数据源监听指标</text>
+        <view class="monitor-title-wrap">
+          <text class="monitor-title">数据源监听指标</text>
+          <text v-if="!enabled && autoDisabled" class="status-pill bad">低准确率自动停用</text>
+          <text v-else-if="!enabled" class="status-pill muted-pill">已停用</text>
+          <text v-else class="status-pill good">启用中</text>
+        </view>
         <view class="monitor-btns">
-          <wd-button size="small" plain :loading="checking" @click="checkNow">立即检测</wd-button>
+          <wd-button size="small" :loading="checking" @click="checkNow">立即分析</wd-button>
           <wd-button v-if="metrics" size="small" plain @click="resetMetrics">重置</wd-button>
         </view>
       </view>
       <template v-if="metrics && metrics.total > 0">
+        <view class="m-bar">
+          <view class="m-bar-fill" :class="rateClass(metrics.validRate)" :style="{ width: pct(metrics.validRate) }" />
+        </view>
         <view class="m-grid">
           <view class="m-item">
             <view class="m-val">{{ metrics.avgLatencyMs }}ms</view>
@@ -322,12 +344,12 @@ const lines = computed(() => {
             <view class="m-lbl">P95 响应</view>
           </view>
           <view class="m-item">
-            <view class="m-val good">{{ pct(metrics.validRate) }}</view>
-            <view class="m-lbl">有效内容率</view>
+            <view class="m-val" :class="rateClass(metrics.validRate)">{{ pct(metrics.validRate) }}</view>
+            <view class="m-lbl">有效准确率</view>
           </view>
           <view class="m-item">
             <view class="m-val bad">{{ pct(metrics.invalidRate) }}</view>
-            <view class="m-lbl">无效内容率</view>
+            <view class="m-lbl">无效占比</view>
           </view>
         </view>
         <view class="m-sub muted">
@@ -342,7 +364,7 @@ const lines = computed(() => {
         </view>
         <view v-if="metrics.lastError" class="m-err">最近错误：{{ metrics.lastError }}</view>
       </template>
-      <view v-else class="muted m-sub">暂无采样记录，点击「立即检测」或使用该源搜索阅读后展示响应时间与有效率</view>
+      <view v-else class="muted m-sub">暂无采样记录，点击「立即分析」或使用该源搜索阅读后展示响应时间与准确率（低于 50% 自动停用，恢复后分析自动开启）</view>
     </view>
 
     <view class="actions">
@@ -507,7 +529,15 @@ const lines = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12rpx;
   margin-bottom: 16rpx;
+}
+
+.monitor-title-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10rpx;
 }
 
 .monitor-title {
@@ -515,9 +545,56 @@ const lines = computed(() => {
   font-weight: 600;
 }
 
+.status-pill {
+  padding: 2rpx 12rpx;
+  border-radius: 8rpx;
+  font-size: 20rpx;
+
+  &.good {
+    background: #eafaf1;
+    color: #239b56;
+  }
+
+  &.bad {
+    background: #fdecea;
+    color: #c0392b;
+  }
+
+  &.muted-pill {
+    background: #f1ede6;
+    color: #8a8378;
+  }
+}
+
 .monitor-btns {
+  flex: none;
   display: flex;
   gap: 12rpx;
+}
+
+.m-bar {
+  height: 8rpx;
+  margin-bottom: 18rpx;
+  border-radius: 4rpx;
+  background: #f1ece4;
+  overflow: hidden;
+}
+
+.m-bar-fill {
+  height: 100%;
+  border-radius: 4rpx;
+
+  &.good {
+    background: #27ae60;
+  }
+
+  &.warn {
+    background: #e09f24;
+  }
+
+  &.bad {
+    background: #c0392b;
+  }
 }
 
 .m-grid {
@@ -532,7 +609,11 @@ const lines = computed(() => {
   font-weight: 600;
 
   &.good {
-    color: #27ae60;
+    color: #239b56;
+  }
+
+  &.warn {
+    color: #c87f0a;
   }
 
   &.bad {

@@ -23,7 +23,7 @@ import (
 
 // subscriptionClient reads a list from the public internet only: its address comes from a user,
 // and must not be a way to reach services behind the server.
-var subscriptionClient = &http.Client{Timeout: 20 * time.Second, Transport: source.PublicTransport()}
+var subscriptionClient = &http.Client{Timeout: 2 * time.Minute, Transport: source.PublicTransport()}
 
 var (
 	reGitHubBlob = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/(?:blob|raw)/(.+)$`)

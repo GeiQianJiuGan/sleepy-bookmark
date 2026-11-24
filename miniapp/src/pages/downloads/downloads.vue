@@ -5,6 +5,7 @@ import { api, type Task } from '@/api'
 import { formatBytes, offlineBooks, offlineBytes, offlineSupported, removeOfflineBook, type OfflineBook } from '@/utils/offline'
 
 import { clearReadCache, READ_CACHE_LIMIT, readCacheBytes, readCacheCount } from '@/utils/readCache'
+import { clearReadPositions, readPositionCount } from '@/utils/readPosition'
 
 const STATUS: Record<Task['status'], string> = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败' }
 
@@ -14,15 +15,23 @@ const total = computed(() => books.value.reduce((sum, b) => sum + offlineBytes(b
 
 // The reading cache looks after itself; the page only shows how full it is.
 const cache = ref({ bytes: 0, count: 0 })
+const posCount = ref(0)
 
 function clearCache() {
   clearReadCache()
   cache.value = { bytes: 0, count: 0 }
 }
 
+function clearPositions() {
+  clearReadPositions()
+  posCount.value = 0
+  uni.showToast({ title: '已清空本地阅读位置记录', icon: 'none' })
+}
+
 async function load() {
   books.value = offlineBooks()
   cache.value = { bytes: readCacheBytes(), count: readCacheCount() }
+  posCount.value = readPositionCount()
   try {
     tasks.value = await api.tasks()
   } catch {
@@ -77,6 +86,13 @@ function remove(b: OfflineBook) {
         <view class="muted">读过的和后面几章会自动缓存，满了先清最久没读的</view>
       </view>
       <text v-if="cache.count" class="link" @click="clearCache">清空</text>
+    </view>
+    <view class="item">
+      <view class="main">
+        <view>{{ posCount }} 本阅读位置记录</view>
+        <view class="muted">退出阅读时记录所在画面位置，再次进入自动恢复；空间不足时自动淘汰久未看的记录</view>
+      </view>
+      <text v-if="posCount" class="link" @click="clearPositions">清空</text>
     </view>
 
     <view class="section">

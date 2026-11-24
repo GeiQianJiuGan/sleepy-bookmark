@@ -104,3 +104,14 @@ export function clearReadCache() {
   Object.keys(index).map(Number).forEach(drop)
   saveIndex()
 }
+
+/** Drops the least-recently-read novel cache entries to free local storage when space runs low. */
+export function evictOldestReadCache(count = 5): number {
+  const oldest = Object.keys(index)
+    .map(Number)
+    .sort((a, b) => index[a].at - index[b].at)
+    .slice(0, count)
+  oldest.forEach(drop)
+  if (oldest.length) saveIndex()
+  return oldest.length
+}

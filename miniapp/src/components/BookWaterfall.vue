@@ -107,6 +107,7 @@ const columns = computed(() => {
   font-size: 28rpx;
   font-weight: 600;
   line-height: 40rpx;
+  word-break: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }

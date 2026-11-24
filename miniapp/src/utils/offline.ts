@@ -106,7 +106,7 @@ async function saveChapter(entry: OfflineBook, ch: Chapter) {
  * Returns the number of chapters that failed. Set `signal.cancelled` to stop early.
  */
 export async function downloadChapters(
-  book: Book,
+  book: OfflineBook['book'],
   chapters: Chapter[],
   onProgress: (done: number, total: number) => void,
   signal: { cancelled: boolean } = { cancelled: false },

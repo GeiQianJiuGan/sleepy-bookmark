@@ -26,6 +26,11 @@ const (
 	StatusError = "error"
 
 	latencyWindowSize = 100
+	// minValidRate is the minimum valid-content ratio (50%) required to keep a source enabled.
+	minValidRate = 0.5
+	// passiveAutoDisableMinTotal waits for enough passive samples before auto-disabling a source,
+	// preserving the 3-failure search-pause behaviour on transient outages.
+	passiveAutoDisableMinTotal = 4
 )
 
 // ActionMetrics summarizes requests, content validity and response latency for one source action.
@@ -46,6 +51,9 @@ type SourceMetrics struct {
 	SourceID      int64                    `json:"sourceId"`
 	SourceName    string                   `json:"sourceName,omitempty"`
 	SourceType    string                   `json:"sourceType,omitempty"`
+	Enabled       bool                     `json:"enabled"`
+	AutoDisabled  bool                     `json:"autoDisabled,omitempty"`
+	AutoAction    string                   `json:"autoAction,omitempty"`
 	Total         int64                    `json:"total"`
 	Valid         int64                    `json:"valid"`
 	Invalid       int64                    `json:"invalid"`
@@ -67,17 +75,28 @@ type SourceMetrics struct {
 
 // MonitorSummary aggregates health, latency and valid content ratio across all sources.
 type MonitorSummary struct {
-	TotalSources     int     `json:"totalSources"`
-	MonitoredSources int     `json:"monitoredSources"`
-	HealthySources   int     `json:"healthySources"`
-	DegradedSources  int     `json:"degradedSources"`
-	UnhealthySources int     `json:"unhealthySources"`
-	TotalRequests    int64   `json:"totalRequests"`
-	ValidRequests    int64   `json:"validRequests"`
-	InvalidRequests  int64   `json:"invalidRequests"`
-	ValidRate        float64 `json:"validRate"`
-	InvalidRate      float64 `json:"invalidRate"`
-	AvgLatencyMs     int64   `json:"avgLatencyMs"`
+	TotalSources        int     `json:"totalSources"`
+	EnabledSources      int     `json:"enabledSources"`
+	DisabledSources     int     `json:"disabledSources"`
+	AutoDisabledSources int     `json:"autoDisabledSources"`
+	MonitoredSources    int     `json:"monitoredSources"`
+	HealthySources      int     `json:"healthySources"`
+	DegradedSources     int     `json:"degradedSources"`
+	UnhealthySources    int     `json:"unhealthySources"`
+	TotalRequests       int64   `json:"totalRequests"`
+	ValidRequests       int64   `json:"validRequests"`
+	InvalidRequests     int64   `json:"invalidRequests"`
+	ValidRate           float64 `json:"validRate"`
+	InvalidRate         float64 `json:"invalidRate"`
+	AvgLatencyMs        int64   `json:"avgLatencyMs"`
+}
+
+// CheckReport is the outcome of a manual batch source analysis run.
+type CheckReport struct {
+	Summary      MonitorSummary   `json:"summary"`
+	Sources      []*SourceMetrics `json:"sources"`
+	AutoDisabled []string         `json:"autoDisabled"`
+	AutoEnabled  []string         `json:"autoEnabled"`
 }
 
 type sourceBucket struct {
@@ -195,12 +214,27 @@ func (m *sourceMonitor) Record(sourceID int64, action string, elapsed time.Durat
 	b.lastErr = errText
 	b.lastKind = errKind
 
+	var bucketTotal, bucketValid int64
+	for _, a := range b.actions {
+		bucketTotal += a.Total
+		bucketValid += a.Valid
+	}
 	snap := *row
 	m.mu.Unlock()
 
 	if m.db != nil {
 		if err := m.db.UpsertSourceMetric(&snap); err != nil {
 			log.Printf("persist source metrics (%d/%s): %v", sourceID, action, err)
+		}
+		if bucketTotal >= passiveAutoDisableMinTotal && rate(bucketValid, bucketTotal) < minValidRate {
+			if srcRow, err := m.db.Source(sourceID); err == nil && srcRow.Enabled {
+				if err := m.db.SetSourceAutoState(sourceID, false, true); err != nil {
+					log.Printf("auto-disable source %d (%s): %v", sourceID, srcRow.Name, err)
+				} else {
+					log.Printf("auto-disabled source %d (%s): valid rate %.1f%% (%d/%d) < 50%%",
+						sourceID, srcRow.Name, rate(bucketValid, bucketTotal)*100, bucketValid, bucketTotal)
+				}
+			}
 		}
 	}
 }
@@ -327,12 +361,22 @@ func (l *Library) AllMetrics(typ string) ([]*SourceMetrics, MonitorSummary, erro
 	list := make([]*SourceMetrics, 0, len(rows))
 	var latencySum int64
 	for _, r := range rows {
+		if r.Enabled {
+			summary.EnabledSources++
+		} else {
+			summary.DisabledSources++
+			if r.AutoDisabled {
+				summary.AutoDisabledSources++
+			}
+		}
 		m := l.monitor.Get(r.ID)
 		if m == nil {
 			m = &SourceMetrics{SourceID: r.ID}
 		}
 		m.SourceName = r.Name
 		m.SourceType = r.Type
+		m.Enabled = r.Enabled
+		m.AutoDisabled = r.AutoDisabled
 		list = append(list, m)
 		if m.Total > 0 {
 			summary.MonitoredSources++
@@ -343,7 +387,7 @@ func (l *Library) AllMetrics(typ string) ([]*SourceMetrics, MonitorSummary, erro
 			switch {
 			case m.ValidRate >= 0.8:
 				summary.HealthySources++
-			case m.ValidRate >= 0.5:
+			case m.ValidRate >= minValidRate:
 				summary.DegradedSources++
 			default:
 				summary.UnhealthySources++
@@ -359,31 +403,55 @@ func (l *Library) AllMetrics(typ string) ([]*SourceMetrics, MonitorSummary, erro
 }
 
 // CheckSource actively probes one source (using its recommend list if configured, otherwise a
-// lightweight search) so latency and valid/invalid content ratios can be measured on demand.
+// lightweight search), auto-disabling it when accuracy drops below 50% and auto-re-enabling
+// previously auto-disabled / low-accuracy sources whose accuracy recovers to >= 50%.
 func (l *Library) CheckSource(ctx context.Context, sourceID int64, keyword string) (*SourceMetrics, error) {
 	row, err := l.db.Source(sourceID)
 	if err != nil {
 		return nil, err
 	}
-	l.probeSource(ctx, row, keyword)
+	autoAction := l.probeSource(ctx, row, keyword)
+	updated, err := l.db.Source(sourceID)
+	if err == nil {
+		row = updated
+	}
 	m := l.monitor.Get(row.ID)
 	if m == nil {
 		m = &SourceMetrics{SourceID: row.ID}
 	}
 	m.SourceName = row.Name
 	m.SourceType = row.Type
+	m.Enabled = row.Enabled
+	m.AutoDisabled = row.AutoDisabled
+	m.AutoAction = autoAction
 	return m, nil
 }
 
-// CheckAllSources actively probes every enabled source (or those of one type) concurrently.
-func (l *Library) CheckAllSources(ctx context.Context, typ, keyword string) ([]*SourceMetrics, MonitorSummary, error) {
-	rows, err := l.db.Sources(typ, true)
+// CheckAllSources actively probes every enabled source and every auto-disabled / low-accuracy
+// source concurrently, auto-disabling sources under 50% accuracy and re-enabling recovered ones.
+func (l *Library) CheckAllSources(ctx context.Context, typ, keyword string) (*CheckReport, error) {
+	rows, err := l.db.Sources(typ, false)
 	if err != nil {
-		return nil, MonitorSummary{}, err
+		return nil, err
 	}
-	sem := make(chan struct{}, 4)
+	targets := make([]*store.SourceRow, 0, len(rows))
+	for _, r := range rows {
+		if r.Enabled || r.AutoDisabled {
+			targets = append(targets, r)
+			continue
+		}
+		if prev := l.monitor.Get(r.ID); prev != nil && prev.Total > 0 && prev.ValidRate < minValidRate {
+			targets = append(targets, r)
+		}
+	}
+
+	autoDisabled := []string{}
+	autoEnabled := []string{}
+	var resMu sync.Mutex
+
+	sem := make(chan struct{}, 6)
 	var wg sync.WaitGroup
-	for _, row := range rows {
+	for _, row := range targets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -393,32 +461,91 @@ func (l *Library) CheckAllSources(ctx context.Context, typ, keyword string) ([]*
 			case <-ctx.Done():
 				return
 			}
-			l.probeSource(ctx, row, keyword)
+			action := l.probeSource(ctx, row, keyword)
+			if action == "" {
+				return
+			}
+			resMu.Lock()
+			if action == "disabled" {
+				autoDisabled = append(autoDisabled, row.Name)
+			} else if action == "enabled" {
+				autoEnabled = append(autoEnabled, row.Name)
+			}
+			resMu.Unlock()
 		}()
 	}
 	wg.Wait()
-	return l.AllMetrics(typ)
+
+	list, summary, err := l.AllMetrics(typ)
+	if err != nil {
+		return nil, err
+	}
+	return &CheckReport{
+		Summary:      summary,
+		Sources:      list,
+		AutoDisabled: autoDisabled,
+		AutoEnabled:  autoEnabled,
+	}, nil
 }
 
-func (l *Library) probeSource(ctx context.Context, row *store.SourceRow, keyword string) {
+func (l *Library) probeLive(ctx context.Context, row *store.SourceRow, keyword string) (string, time.Duration, bool, error) {
 	src, err := parseSource(row)
 	if err != nil {
-		l.monitor.Record(row.ID, ActionSearch, 0, false, err)
-		return
+		return ActionSearch, 0, false, err
 	}
 	if src.Recommend != nil && keyword == "" {
 		pctx, cancel := context.WithTimeout(ctx, recommendTimeout)
 		defer cancel()
 		start := time.Now()
 		infos, err := l.engine.Recommend(pctx, src)
-		l.monitor.Record(row.ID, ActionRecommend, time.Since(start), len(infos) > 0, err)
-		return
+		return ActionRecommend, time.Since(start), err == nil && len(infos) > 0, err
 	}
 	q := cmp.Or(keyword, "斗")
 	pctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
 	start := time.Now()
 	books, err := l.engine.Search(pctx, src, q, 1)
-	l.health.note(row.ID, err)
-	l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(books) > 0, err)
+	return ActionSearch, time.Since(start), err == nil && len(books) > 0, err
+}
+
+func (l *Library) probeSource(ctx context.Context, row *store.SourceRow, keyword string) string {
+	prev := l.monitor.Get(row.ID)
+	hadLowRate := prev != nil && prev.Total > 0 && prev.ValidRate < minValidRate
+
+	action, elapsed, valid, err := l.probeLive(ctx, row, keyword)
+	if err == nil && valid {
+		l.health.reset(row.ID)
+		// A live passing probe during manual analysis clears stale historical failures so
+		// recovered sources immediately reflect current accuracy instead of staying stuck < 50%.
+		if !row.Enabled || hadLowRate {
+			_ = l.monitor.Reset(row.ID)
+		}
+		l.monitor.Record(row.ID, action, elapsed, true, nil)
+		m := l.monitor.Get(row.ID)
+		if !row.Enabled && (row.AutoDisabled || hadLowRate) && m != nil && m.ValidRate >= minValidRate {
+			if setErr := l.db.SetSourceAutoState(row.ID, true, false); setErr != nil {
+				log.Printf("auto-enable source %d (%s): %v", row.ID, row.Name, setErr)
+			} else {
+				log.Printf("auto-enabled source %d (%s): valid rate recovered to %.1f%%", row.ID, row.Name, m.ValidRate*100)
+				return "enabled"
+			}
+		}
+		return ""
+	}
+
+	if action == ActionSearch {
+		l.health.note(row.ID, err)
+	}
+	l.monitor.Record(row.ID, action, elapsed, false, err)
+	m := l.monitor.Get(row.ID)
+	if m != nil && m.Total > 0 && m.ValidRate < minValidRate && row.Enabled {
+		if setErr := l.db.SetSourceAutoState(row.ID, false, true); setErr != nil {
+			log.Printf("auto-disable source %d (%s): %v", row.ID, row.Name, setErr)
+		} else {
+			log.Printf("auto-disabled source %d (%s): valid rate %.1f%% (%d/%d) < 50%%",
+				row.ID, row.Name, m.ValidRate*100, m.Valid, m.Total)
+			return "disabled"
+		}
+	}
+	return ""
 }

@@ -363,7 +363,8 @@ func (s *Server) sourceMetrics(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{"summary": summary, "sources": list})
 }
 
-// checkSources actively probes one source (?id=) or all enabled sources and updates monitoring stats.
+// checkSources actively probes one source (?id=) or all enabled & auto-disabled sources,
+// updating monitoring stats and auto-disabling / re-enabling sources by the 50% accuracy rule.
 func (s *Server) checkSources(c echo.Context) error {
 	keyword := c.QueryParam("q")
 	if idStr := c.QueryParam("id"); idStr != "" {
@@ -377,11 +378,11 @@ func (s *Server) checkSources(c echo.Context) error {
 		}
 		return c.JSON(http.StatusOK, m)
 	}
-	list, summary, err := s.lib.CheckAllSources(c.Request().Context(), c.QueryParam("type"), keyword)
+	report, err := s.lib.CheckAllSources(c.Request().Context(), c.QueryParam("type"), keyword)
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, echo.Map{"summary": summary, "sources": list})
+	return c.JSON(http.StatusOK, report)
 }
 
 // resetSourceMetrics clears recorded latency and valid/invalid counters for one source.
