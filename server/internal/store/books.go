@@ -111,18 +111,35 @@ func (d *DB) ChapterAt(bookID int64, idx int) (*Chapter, error) {
 
 type TocEntry struct{ Title, URL string }
 
-// ReplaceToc syncs the chapter list of a book. Chapters are matched by URL, so a chapter keeps
-// its id (which reading progress and the content cache refer to) when the source inserts,
-// removes or reorders chapters. It returns the ids of removed chapters that had cached content.
+// ReplaceToc syncs the chapter list of a book. A chapter keeps its id (which reading progress
+// and the content cache refer to) when the source inserts, removes or reorders chapters:
+// entries are matched to the existing chapters by URL, then by title for chapters whose URL
+// changed. It returns the ids whose cached content is no longer valid.
 func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error) {
 	old, err := d.Chapters(bookID)
 	if err != nil {
 		return nil, err
 	}
-	byURL := map[string][]*Chapter{}
-	for _, c := range old {
-		byURL[c.URL] = append(byURL[c.URL], c)
+	// match[i] is the existing chapter that toc[i] continues, nil for a new chapter.
+	match := make([]*Chapter, len(toc))
+	used := map[int64]bool{}
+	pair := func(key func(title, url string) string) {
+		free := map[string][]*Chapter{}
+		for _, c := range old {
+			if k := key(c.Title, c.URL); !used[c.ID] && k != "" {
+				free[k] = append(free[k], c)
+			}
+		}
+		for i, t := range toc {
+			k := key(t.Title, t.URL)
+			if match[i] == nil && len(free[k]) > 0 {
+				match[i], free[k] = free[k][0], free[k][1:]
+				used[match[i].ID] = true
+			}
+		}
 	}
+	pair(func(_, url string) string { return url })
+	pair(func(title, _ string) string { return title })
 
 	tx, err := d.Begin()
 	if err != nil {
@@ -134,9 +151,12 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 		return nil, err
 	}
 	for i, t := range toc {
-		if same := byURL[t.URL]; len(same) > 0 {
-			byURL[t.URL] = same[1:]
-			_, err = tx.Exec(`UPDATE chapters SET idx = ?, title = ? WHERE id = ?`, i, t.Title, same[0].ID)
+		if m := match[i]; m != nil {
+			cached := m.Cached && m.URL == t.URL
+			if m.Cached && !cached {
+				stale = append(stale, m.ID)
+			}
+			_, err = tx.Exec(`UPDATE chapters SET idx = ?, title = ?, url = ?, cached = ? WHERE id = ?`, i, t.Title, t.URL, cached, m.ID)
 		} else {
 			_, err = tx.Exec(`INSERT INTO chapters (book_id, idx, title, url) VALUES (?, ?, ?, ?)`, bookID, i, t.Title, t.URL)
 		}
@@ -144,11 +164,9 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 			return nil, err
 		}
 	}
-	for _, gone := range byURL {
-		for _, c := range gone {
-			if c.Cached {
-				stale = append(stale, c.ID)
-			}
+	for _, c := range old {
+		if !used[c.ID] && c.Cached {
+			stale = append(stale, c.ID)
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM chapters WHERE book_id = ? AND idx < 0`, bookID); err != nil {

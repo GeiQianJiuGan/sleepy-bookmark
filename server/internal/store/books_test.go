@@ -14,12 +14,13 @@ func entries(urls ...string) []TocEntry {
 	return out
 }
 
-func TestReplaceTocKeepsChapterIDsByURL(t *testing.T) {
+func newBook(t *testing.T) (*DB, int64) {
+	t.Helper()
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 	srcID, err := db.CreateSource("s", "novel", "{}")
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +29,36 @@ func TestReplaceTocKeepsChapterIDsByURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return db, bookID
+}
+
+// When the site moves its chapters to new URLs, a chapter is recognised by its title so that
+// reading progress still points at it; only its cached content is dropped.
+func TestReplaceTocKeepsChapterIDsWhenURLsChange(t *testing.T) {
+	db, bookID := newBook(t)
+	if _, err := db.ReplaceToc(bookID, []TocEntry{{"one", "/old/1"}, {"two", "/old/2"}}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := db.Chapters(bookID)
+	if err := db.SetChapterCached(before[1].ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := db.ReplaceToc(bookID, []TocEntry{{"one", "/new/1"}, {"two", "/new/2"}, {"three", "/new/3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := db.Chapters(bookID)
+	if len(after) != 3 || after[0].ID != before[0].ID || after[1].ID != before[1].ID {
+		t.Fatalf("chapter ids changed: before %+v %+v, after %+v %+v", before[0], before[1], after[0], after[1])
+	}
+	if after[1].URL != "/new/2" || after[1].Cached || !slices.Equal(stale, []int64{before[1].ID}) {
+		t.Fatalf("chapter two: %+v, stale %v", after[1], stale)
+	}
+}
+
+func TestReplaceTocKeepsChapterIDsByURL(t *testing.T) {
+	db, bookID := newBook(t)
 
 	// urls returns the chapter URLs in order, ids maps URL to chapter id.
 	state := func() (urls []string, ids map[string]int64) {
