@@ -114,7 +114,7 @@ type TocEntry struct{ Title, URL string }
 // ReplaceToc syncs the chapter list of a book. A chapter keeps its id (which reading progress
 // and the content cache refer to) when the source inserts, removes or reorders chapters:
 // entries are matched to the existing chapters by URL, then by title for chapters whose URL
-// changed and whose title is unambiguous. It returns the ids whose cached content is no longer valid.
+// changed and whose title still identifies them. It returns the ids whose cached content is no longer valid.
 func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error) {
 	old, err := d.Chapters(bookID)
 	if err != nil {
@@ -133,8 +133,9 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 			used[same[0].ID] = true
 		}
 	}
-	// A title identifies a chapter only if no other unmatched chapter has it on either side;
-	// otherwise the entry counts as new rather than risk continuing the wrong chapter.
+	// Chapters whose URL changed are recognised by title. When several share a title they are
+	// paired in catalog order, but only if none of them appeared or disappeared; otherwise
+	// there is no telling which is which and the entries count as new.
 	oldByTitle, newCount := map[string][]*Chapter{}, map[string]int{}
 	for _, c := range old {
 		if !used[c.ID] {
@@ -147,10 +148,13 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 		}
 	}
 	for i, t := range toc {
-		if same := oldByTitle[t.Title]; match[i] == nil && t.Title != "" && len(same) == 1 && newCount[t.Title] == 1 {
-			match[i] = same[0]
-			used[same[0].ID] = true
+		same := oldByTitle[t.Title]
+		if match[i] != nil || t.Title == "" || len(same) == 0 || len(same) != newCount[t.Title] {
+			continue
 		}
+		match[i], oldByTitle[t.Title] = same[0], same[1:]
+		newCount[t.Title]--
+		used[same[0].ID] = true
 	}
 	// A chapter's content is read up to the URL of the chapter after it (see Engine.Content),
 	// so it has to be read again when a different chapter follows it.

@@ -169,3 +169,21 @@ func TestMarkChapterCachedOnlyForTheCurrentRuleAndURL(t *testing.T) {
 		t.Fatalf("content fetched with the current rule and URL was not marked cached (err %v)", err)
 	}
 }
+
+// Chapters that share a title all move to new URLs in the same order: each keeps its id.
+func TestReplaceTocPairsSameTitledChaptersInOrder(t *testing.T) {
+	db, bookID := newBook(t)
+	if _, err := db.ReplaceToc(bookID, []TocEntry{{"notice", "/old/1"}, {"one", "/old/2"}, {"notice", "/old/3"}}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := db.Chapters(bookID)
+	if _, err := db.ReplaceToc(bookID, []TocEntry{{"notice", "/new/1"}, {"one", "/new/2"}, {"notice", "/new/3"}}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := db.Chapters(bookID)
+	for i := range before {
+		if after[i].ID != before[i].ID {
+			t.Errorf("chapter %d changed id from %d to %d", i, before[i].ID, after[i].ID)
+		}
+	}
+}
