@@ -143,7 +143,11 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 				c.Images = append(c.Images, resolve(u, img))
 			}
 		} else {
-			text = append(text, doc.Values(bodyRule(src.Content.Body))...)
+			body := src.Content.Body
+			if _, isHTML := doc.(htmlNode); isHTML {
+				body = bodyRule(body)
+			}
+			text = append(text, doc.Values(body)...)
 		}
 		u = resolve(u, first(doc, src.Content.NextPage))
 	}
