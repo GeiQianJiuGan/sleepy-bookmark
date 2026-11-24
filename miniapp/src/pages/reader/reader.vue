@@ -39,10 +39,13 @@ const currentId = ref(0)
 /** Reads a chapter from the device if it was downloaded, otherwise from the server. */
 async function fetchChapter(id: number): Promise<Loaded> {
   const c: ChapterContent = readOfflineChapter(bookId, id) || (await api.chapter(id))
+  // The catalog decides what comes next: a downloaded chapter still carries the nextId
+  // from the day it was saved, which is 0 for what was then the last chapter.
+  const i = chapters.value.findIndex((ch) => ch.id === id)
   return {
     id: c.id,
     title: c.title,
-    nextId: c.nextId,
+    nextId: i >= 0 ? chapters.value[i + 1]?.id || 0 : c.nextId,
     paragraphs: c.text?.split('\n'),
     images: c.images?.map(absoluteUrl),
   }
