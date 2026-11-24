@@ -103,6 +103,12 @@ func (d *DB) UserByOpenID(openid string) (*User, error) {
 	return &u, notFound(err)
 }
 
+func (d *DB) User(id int64) (*User, error) {
+	u := User{ID: id}
+	err := d.QueryRow(`SELECT openid FROM users WHERE id = ?`, id).Scan(&u.OpenID)
+	return &u, notFound(err)
+}
+
 func (d *DB) UserCount() (n int, err error) {
 	err = d.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
 	return

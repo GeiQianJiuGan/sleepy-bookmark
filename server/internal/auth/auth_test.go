@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/labstack/echo/v4"
+
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/config"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
@@ -81,5 +83,32 @@ func TestOnlyFirstAccountRegistersWithoutWhitelist(t *testing.T) {
 	wg.Wait()
 	if n, _ := a.db.UserCount(); n != 1 || ok.Load() != 1 {
 		t.Fatalf("got %d users and %d successful logins, want 1 and 1", n, ok.Load())
+	}
+}
+
+func TestTokenStopsWorkingWhenRemovedFromWhitelist(t *testing.T) {
+	fakeWeChat(t)
+	a := newAuth(t, config.Config{OpenIDWhitelist: []string{"alice", "bob"}})
+	token, err := a.Login(context.Background(), "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() int {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		h := a.Middleware(func(c echo.Context) error { return c.NoContent(http.StatusNoContent) })
+		if err := h(e.NewContext(req, rec)); err != nil {
+			return err.(*echo.HTTPError).Code
+		}
+		return rec.Code
+	}
+	if got := status(); got != http.StatusNoContent {
+		t.Fatalf("whitelisted account: got %d", got)
+	}
+	a.cfg.OpenIDWhitelist = []string{"alice"}
+	if got := status(); got != http.StatusUnauthorized {
+		t.Fatalf("removed account: got %d, want 401", got)
 	}
 }

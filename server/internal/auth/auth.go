@@ -81,13 +81,18 @@ func (a *Auth) Login(ctx context.Context, code string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(a.cfg.OpenIDWhitelist) > 0 && !a.cfg.DevLogin && !slices.Contains(a.cfg.OpenIDWhitelist, openid) {
+	if !a.whitelisted(openid) {
 		return "", fmt.Errorf("%w（openid: %s）", ErrForbidden, openid)
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 		Subject:   strconv.FormatInt(user.ID, 10),
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenTTL)),
 	}).SignedString(a.secret)
+}
+
+// whitelisted reports whether an existing account may still use the server.
+func (a *Auth) whitelisted(openid string) bool {
+	return a.cfg.DevLogin || len(a.cfg.OpenIDWhitelist) == 0 || slices.Contains(a.cfg.OpenIDWhitelist, openid)
 }
 
 // mayRegister: with a whitelist only listed openids may join; without one only the very first user may.
@@ -147,6 +152,12 @@ func (a *Auth) Middleware(next echo.HandlerFunc) echo.HandlerFunc {
 		id, err := strconv.ParseInt(claims.Subject, 10, 64)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusUnauthorized, "无效的登录凭证")
+		}
+		// Checked on every request so that removing an openid from the whitelist takes effect
+		// at once instead of when the token expires.
+		user, err := a.db.User(id)
+		if err != nil || !a.whitelisted(user.OpenID) {
+			return echo.NewHTTPError(http.StatusUnauthorized, "未登录或登录已过期")
 		}
 		c.Set(userKey, id)
 		return next(c)
