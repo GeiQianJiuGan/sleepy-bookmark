@@ -14,6 +14,8 @@ func TestFileURL(t *testing.T) {
 		"https://github.com/someone/lists/blob/main/dir/all.json":     "https://raw.githubusercontent.com/someone/lists/main/dir/all.json",
 		"https://github.com/someone/lists/raw/main/all.json":          "https://raw.githubusercontent.com/someone/lists/main/all.json",
 		"https://gist.github.com/someone/0123456789abcdef":            "https://gist.githubusercontent.com/someone/0123456789abcdef/raw",
+		"https://gitee.com/someone/lists/blob/master/all.json":        "https://gitee.com/someone/lists/raw/master/all.json",
+		"https://gitlab.com/someone/lists/-/blob/main/all.json":       "https://gitlab.com/someone/lists/-/raw/main/all.json",
 		"https://raw.githubusercontent.com/someone/lists/main/a.json": "https://raw.githubusercontent.com/someone/lists/main/a.json",
 		"https://example.invalid/blob/list.json":                      "https://example.invalid/blob/list.json",
 	} {

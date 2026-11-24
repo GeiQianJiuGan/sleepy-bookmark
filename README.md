@@ -67,6 +67,8 @@ cd miniapp && npm run type-check && npm run build:mp-weixin
 | `JWT_SECRET` | 自动生成 | 留空则生成后保存在 `DATA_DIR/jwt.secret` |
 | `DEV_LOGIN` | `false` | 跳过微信登录，所有请求都是同一个用户。只用于本地开发 |
 | `DEMO_SOURCE` | `false` | 挂载内置演示站点和书源 |
+| `SOURCES_FEED_FILE` | 空 | 本地书源 JSON 文件路径，配置后通过 `GET /api/sources/feed.json` 对外提供只读订阅链接 |
+| `SEED_SOURCES_FILE` | 空 | 启动时自动导入的本地书源 JSON 文件路径（已存在的同名书源不会覆盖） |
 | `PREFETCH_AHEAD` | `5` | 打开一章时后台预抓后面几章 |
 | `REFRESH_INTERVAL_MINUTES` | `180` | 定时刷新书架上书籍目录并缓存新章节的间隔 |
 | `IMG_CACHE_MAX_MB` | `2048` | 图片缓存上限，超出后按最久未访问清理 |
@@ -101,8 +103,9 @@ docker compose up -d --build
 - 左上角的图标在小说 / 漫画之间整体切换，书架、搜索、历史都按当前模式过滤
 - 书源管理（格式见 [docs/source-rule.md](docs/source-rule.md)）：
   - 简单模式：只填名称和网站地址，搜索、详情、目录、正文由后端按页面结构自动识别
-  - 高级模式：导入 JSON 规则（单个或数组），用于自动识别不了的网站
-  - 订阅：填一个书源列表（JSON 文件）的网址导入，可再次同步；支持 GitHub 文件地址
+  - 高级模式：导入 JSON 规则（单个、数组、`{sources:[...]}` 源包，以及声明式阅读 Legado 书源 JSON），支持容错跳过无效项与一键导出 JSON
+  - 订阅：填一个书源列表（JSON 文件）的网址导入，可单个或全部同步；支持 GitHub、Gist、Gitee、GitLab 页面地址自动转 Raw，也可通过 `SOURCES_FEED_FILE` 自建订阅链接
+  - 数据源监听：持续记录各书源的平均/最近/最小/最大/P95 响应时间，以及有效内容/无效内容（空结果与报错）比率，支持持久化统计与一键全量检测
   - 编辑、启停、删除、在线测试
 - 多书源并发搜索，可以只搜某一个书源；搜索框右侧的按钮展开高级选项，可选模糊（默认，按书名相关度排序）或精确（书名完全一致）
 - 搜索页没有输入关键词时是两列瀑布流，向下滑动继续加载，分「推荐」和「排行」两个视图（书源规则里配了 `recommend` 才有）
@@ -131,10 +134,13 @@ docker compose up -d --build
 | `POST /api/auth/login` | `{code, appId}` 换 `{token, refreshToken, expiresIn}`。`code` 来自 `wx.login`，`appId` 是小程序运行时的 AppID（可不传，传了会和服务端的 `WX_APPID` 核对）。`token` 有效 2 小时，`refreshToken` 有效 30 天 |
 | `POST /api/auth/refresh` | `{refreshToken}` 换一组新的 token；返回 401 表示需要重新登录 |
 | `GET /api/img?s=&u=&sig=` | 图片代理，地址由后端签名生成 |
-| `GET/POST /api/sources`，`PUT/DELETE /api/sources/:id` | 书源管理 |
+| `GET/POST /api/sources`，`PUT/DELETE /api/sources/:id` | 书源管理（`POST /api/sources?skipInvalid=1` 支持批量容错导入） |
+| `GET /api/sources/export` | 导出书源列表 JSON（可用于备份或托管为订阅链接） |
+| `GET /api/sources/metrics`，`POST /api/sources/monitor/check`，`DELETE /api/sources/:id/metrics` | 数据源监听统计（响应时间、有效/无效内容比率）、主动拨测与重置 |
+| `GET /api/sources/feed.json` | 可选，配置 `SOURCES_FEED_FILE` 后对外提供只读订阅链接 |
 | `PUT /api/sources/:id/enabled` | 启停 |
 | `POST /api/sources/test` | 不保存，直接测试一条规则 |
-| `GET/POST /api/subscriptions`，`POST /api/subscriptions/:id/sync`，`DELETE /api/subscriptions/:id` | 书源列表订阅：添加、同步、取消（`?sources=1` 连同书源一起删） |
+| `GET/POST /api/subscriptions`，`POST /api/subscriptions/sync-all`，`POST /api/subscriptions/:id/sync`，`DELETE /api/subscriptions/:id` | 书源列表订阅：添加、全量/单个同步、取消（`?sources=1` 连同书源一起删） |
 | `GET /api/search?type=&q=&page=&source=&match=` | 搜索。`source` 是书源 id，不传搜全部；`match=exact` 只留书名完全一致的 |
 | `GET /api/rank?source=&offset=&limit=` | 一个书源的榜单，分页（每页默认 20、最多 50 本），返回 `total` 和 `books` |
 | `GET /api/feed?type=&offset=&limit=` | 跨书源去重的推荐，分页；每本带 `sources`（上榜的书源数）和 `reason` |

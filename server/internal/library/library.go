@@ -29,12 +29,13 @@ const (
 )
 
 type Library struct {
-	cfg    config.Config
-	db     *store.DB
-	disk   *cache.Disk
-	engine *source.Engine
-	flight singleflight.Group
-	health healthBook
+	cfg     config.Config
+	db      *store.DB
+	disk    *cache.Disk
+	engine  *source.Engine
+	flight  singleflight.Group
+	health  healthBook
+	monitor *sourceMonitor
 
 	recommends recommendCache
 
@@ -54,6 +55,7 @@ func New(cfg config.Config, db *store.DB, disk *cache.Disk) *Library {
 		db:         db,
 		disk:       disk,
 		engine:     &source.Engine{Fetcher: source.NewFetcher()},
+		monitor:    newSourceMonitor(db),
 		background: make(chan struct{}, 2),
 		queue:      make(chan *Task, 100),
 	}
@@ -168,7 +170,9 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 			}
 			src, err := parseSource(row)
 			if err == nil {
+				start := time.Now()
 				results[i].books, err = l.engine.Search(ctx, src, key, page)
+				l.monitor.Record(row.ID, ActionSearch, time.Since(start), len(results[i].books) > 0, err)
 				l.health.note(row.ID, err)
 			}
 			results[i].err = err
@@ -211,7 +215,10 @@ func (l *Library) Book(ctx context.Context, id int64) (*store.Book, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
+	start := time.Now()
 	info, err := l.engine.Detail(ctx, src, b.URL)
+	validDetail := info.Title != "" || info.Author != "" || info.Cover != "" || info.Intro != "" || info.Latest != ""
+	l.monitor.Record(b.SourceID, ActionDetail, time.Since(start), validDetail, err)
 	if err != nil {
 		// The search result is still usable without the detail page.
 		log.Printf("detail %q: %v", b.Title, err)
@@ -262,7 +269,9 @@ func (l *Library) refreshToc(ctx context.Context, b *store.Book) ([]*store.Chapt
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
+		start := time.Now()
 		toc, err := l.engine.Toc(ctx, src, pick(b.TocURL, b.URL))
+		l.monitor.Record(b.SourceID, ActionToc, time.Since(start), len(toc) > 0, err)
 		if err != nil {
 			return nil, err
 		}
@@ -363,7 +372,9 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 		if next != nil {
 			stop = next.URL
 		}
+		start := time.Now()
 		c, err := l.engine.Content(ctx, src, ch.URL, stop)
+		l.monitor.Record(b.SourceID, ActionContent, time.Since(start), c.Text != "" || len(c.Images) > 0, err)
 		if err != nil {
 			return nil, err
 		}
@@ -448,7 +459,9 @@ func (l *Library) fetchImage(ctx context.Context, sourceID int64, url string, ke
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
+		start := time.Now()
 		data, err := l.engine.Fetcher.Image(ctx, src, url)
+		l.monitor.Record(sourceID, ActionImage, time.Since(start), len(data) > 0, err)
 		if err != nil {
 			return nil, err
 		}
@@ -469,9 +482,11 @@ func (l *Library) fetchImage(ctx context.Context, sourceID int64, url string, ke
 func (l *Library) TestSource(ctx context.Context, src *source.Source, key string) map[string]any {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
+	started := time.Now()
 	report := map[string]any{}
 	fail := func(step string, err error) map[string]any {
 		report["failedStep"], report["error"] = step, err.Error()
+		report["latencyMs"] = time.Since(started).Milliseconds()
 		return report
 	}
 	var books []source.BookInfo
@@ -521,6 +536,7 @@ func (l *Library) TestSource(ctx context.Context, src *source.Source, key string
 		c.Text = string(text[:200]) + "…"
 	}
 	report["content"] = c
+	report["latencyMs"] = time.Since(started).Milliseconds()
 	return report
 }
 

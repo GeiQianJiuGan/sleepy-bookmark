@@ -21,7 +21,11 @@ type Config struct {
 	// DevLogin skips WeChat code2session and logs every client in as one fixed user.
 	DevLogin bool
 	// DemoSource mounts a built-in fake novel/comic site under /demo and seeds two sources for it.
-	DemoSource      bool
+	DemoSource bool
+	// SourcesFeedFile exposes a local JSON rule bundle at GET /api/sources/feed.json as a subscription URL.
+	SourcesFeedFile string
+	// SeedSourcesFile imports rules from a local JSON file on startup (skipping names that already exist).
+	SeedSourcesFile string
 	PublicURL       string
 	PrefetchAhead   int
 	RefreshInterval time.Duration
@@ -42,6 +46,8 @@ func Load() Config {
 		WXSecret:        os.Getenv("WX_SECRET"),
 		DevLogin:        envBool("DEV_LOGIN"),
 		DemoSource:      envBool("DEMO_SOURCE"),
+		SourcesFeedFile: strings.TrimSpace(os.Getenv("SOURCES_FEED_FILE")),
+		SeedSourcesFile: strings.TrimSpace(os.Getenv("SEED_SOURCES_FILE")),
 		PublicURL:       strings.TrimRight(os.Getenv("PUBLIC_URL"), "/"),
 		PrefetchAhead:   envInt("PREFETCH_AHEAD", 5),
 		RefreshInterval: time.Duration(envInt("REFRESH_INTERVAL_MINUTES", 180)) * time.Minute,

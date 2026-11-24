@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { api, type Mode, type TestReport } from '@/api'
+import { api, type Mode, type SourceMetrics, type TestReport } from '@/api'
 import { toastError } from '@/api/http'
 import { useAppStore } from '@/stores/app'
 
-let id = 0
+const sourceId = ref(0)
 /** Simple: a name and an address, everything else recognised. Advanced: the rule as JSON. */
 const advanced = ref(false)
 const name = ref('')
@@ -16,6 +16,8 @@ const text = ref('')
 let handWritten = false
 const keyword = ref('')
 const report = ref<TestReport | null>(null)
+const metrics = ref<SourceMetrics | null>(null)
+const checking = ref(false)
 const testing = ref(false)
 const busy = ref(false)
 
@@ -23,16 +25,17 @@ const busy = ref(false)
 watch([type, baseUrl, text], () => (report.value = null))
 
 onLoad(async (query) => {
-  id = Number(query?.id) || 0
+  sourceId.value = Number(query?.id) || 0
   if (query?.json) advanced.value = true
-  if (!id) return
+  if (!sourceId.value) return
   try {
-    const src = (await api.sources()).find((s) => s.id === id)
+    const src = (await api.sources()).find((s) => s.id === sourceId.value)
     if (!src) return
     name.value = src.name
     type.value = src.type
     baseUrl.value = String(src.rule.baseUrl ?? '')
     text.value = JSON.stringify(src.rule, null, 2)
+    metrics.value = src.metrics ?? null
     handWritten = !src.auto
     advanced.value = handWritten
   } catch (e) {
@@ -107,12 +110,56 @@ async function tryOut(): Promise<TestReport> {
   testing.value = true
   report.value = null
   try {
-    report.value = await api.testSource(rule(), keyword.value.trim(), id)
+    report.value = await api.testSource(rule(), keyword.value.trim(), sourceId.value)
     return report.value
   } finally {
     testing.value = false
   }
 }
+
+async function checkNow() {
+  if (!sourceId.value || checking.value) return
+  checking.value = true
+  try {
+    metrics.value = (await api.checkSources({ id: sourceId.value, q: keyword.value.trim() || undefined })) as SourceMetrics
+    uni.showToast({ title: '检测完成', icon: 'none' })
+  } catch (e) {
+    toastError(e)
+  } finally {
+    checking.value = false
+  }
+}
+
+async function resetMetrics() {
+  if (!sourceId.value) return
+  try {
+    await api.resetSourceMetrics(sourceId.value)
+    metrics.value = null
+    uni.showToast({ title: '统计已重置', icon: 'none' })
+  } catch (e) {
+    toastError(e)
+  }
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  search: '搜索',
+  recommend: '推荐',
+  detail: '详情',
+  toc: '目录',
+  content: '正文/图集',
+  image: '图片',
+}
+
+const pct = (n: number) => `${Math.round(n * 100)}%`
+
+const actionRows = computed(() => {
+  if (!metrics.value?.actions) return []
+  return Object.entries(metrics.value.actions).map(([k, v]) => ({
+    key: k,
+    label: ACTION_LABELS[k] || k,
+    ...v,
+  }))
+})
 
 const test = () =>
   run(async () => {
@@ -126,11 +173,25 @@ const confirm = (title: string, content: string, confirmText: string) =>
 
 async function store() {
   let title = '已保存'
-  if (id) await api.updateSource(id, rule())
-  else {
+  const payload = rule()
+  if (sourceId.value) {
+    await api.updateSource(sourceId.value, payload)
+  } else {
+    const isBatch = Array.isArray(payload) || (typeof payload === 'object' && payload !== null && 'sources' in payload)
     // A rule named like an existing source replaces it instead of adding a duplicate.
-    const { ids, updated = 0 } = await api.createSources(rule())
-    if (updated) title = ids.length > updated ? `新增 ${ids.length - updated} 个，更新 ${updated} 个` : `已更新 ${updated} 个同名书源`
+    const res = await api.createSources(payload, isBatch)
+    const updated = res.updated ?? 0
+    const added = res.added ?? res.ids.length - updated
+    if (res.skipped?.length) {
+      uni.showModal({
+        title: `新增 ${added} 个，更新 ${updated} 个`,
+        content: `跳过 ${res.skipped.length} 个无效条目：` + res.skipped.slice(0, 5).map((s) => `${s.name}（${s.error}）`).join('；'),
+        showCancel: false,
+        success: () => uni.navigateBack(),
+      })
+      return
+    }
+    if (updated || isBatch) title = `新增 ${added} 个，更新 ${updated} 个`
   }
   uni.showToast({ title, icon: 'none' })
   setTimeout(() => uni.navigateBack(), 500)
@@ -164,7 +225,7 @@ function remove() {
     success: ({ confirm }) => {
       if (!confirm) return
       run(async () => {
-        await api.deleteSource(id)
+        await api.deleteSource(sourceId.value)
         uni.navigateBack()
       })
     },
@@ -189,6 +250,7 @@ const lines = computed(() => {
   if (r.content?.images?.length) out.push({ ok: true, text: `图片：${r.content.images.length} 张` })
   else if (r.content?.text) out.push({ ok: true, text: `正文：${r.content.text.slice(0, 60)}…` })
   if (r.failedStep) out.push({ ok: false, text: `${STEPS[r.failedStep]}失败：${r.error}` })
+  if (typeof r.latencyMs === 'number') out.push({ ok: !r.failedStep, text: `全流程耗时：${r.latencyMs} ms` })
   return out
 })
 </script>
@@ -223,7 +285,7 @@ const lines = computed(() => {
 
     <template v-else>
       <view class="bar">
-        <text class="muted">粘贴一个书源或书源数组；没写的部分按 auto 自动识别。格式见 docs/source-rule.md</text>
+        <text class="muted">粘贴单个书源、书源数组、{sources:[...]} 源包，或声明式阅读（Legado）JSON</text>
         <text class="link" @click="paste">从剪贴板粘贴</text>
       </view>
       <textarea v-model="text" class="json" :maxlength="-1" auto-height :show-confirm-bar="false" />
@@ -241,8 +303,50 @@ const lines = computed(() => {
       <view v-for="(l, i) in lines" :key="i" class="line" :class="{ bad: !l.ok }">{{ l.ok ? '✓' : '✗' }} {{ l.text }}</view>
     </view>
 
+    <view v-if="sourceId" class="monitor-box">
+      <view class="monitor-head">
+        <text class="monitor-title">数据源监听指标</text>
+        <view class="monitor-btns">
+          <wd-button size="small" plain :loading="checking" @click="checkNow">立即检测</wd-button>
+          <wd-button v-if="metrics" size="small" plain @click="resetMetrics">重置</wd-button>
+        </view>
+      </view>
+      <template v-if="metrics && metrics.total > 0">
+        <view class="m-grid">
+          <view class="m-item">
+            <view class="m-val">{{ metrics.avgLatencyMs }}ms</view>
+            <view class="m-lbl">平均响应</view>
+          </view>
+          <view class="m-item">
+            <view class="m-val">{{ metrics.p95LatencyMs }}ms</view>
+            <view class="m-lbl">P95 响应</view>
+          </view>
+          <view class="m-item">
+            <view class="m-val good">{{ pct(metrics.validRate) }}</view>
+            <view class="m-lbl">有效内容率</view>
+          </view>
+          <view class="m-item">
+            <view class="m-val bad">{{ pct(metrics.invalidRate) }}</view>
+            <view class="m-lbl">无效内容率</view>
+          </view>
+        </view>
+        <view class="m-sub muted">
+          总请求 {{ metrics.total }} · 有效 {{ metrics.valid }} · 空结果 {{ metrics.empty }} · 报错 {{ metrics.error }} · 最近 {{ metrics.lastLatencyMs }}ms（最小 {{ metrics.minLatencyMs }}ms / 最大 {{ metrics.maxLatencyMs }}ms）
+        </view>
+        <view v-if="actionRows.length" class="m-actions">
+          <view v-for="a in actionRows" :key="a.key" class="m-action-row">
+            <text class="a-name">{{ a.label }}</text>
+            <text class="muted">有效 {{ a.valid }}/{{ a.total }}（{{ pct(a.validRate) }}）</text>
+            <text class="muted">均 {{ a.avgLatencyMs }}ms</text>
+          </view>
+        </view>
+        <view v-if="metrics.lastError" class="m-err">最近错误：{{ metrics.lastError }}</view>
+      </template>
+      <view v-else class="muted m-sub">暂无采样记录，点击「立即检测」或使用该源搜索阅读后展示响应时间与有效率</view>
+    </view>
+
     <view class="actions">
-      <view v-if="id" class="side"><wd-button plain type="error" @click="remove">删除</wd-button></view>
+      <view v-if="sourceId" class="side"><wd-button plain type="error" @click="remove">删除</wd-button></view>
       <view class="primary"><wd-button block :loading="busy" @click="save">保存</wd-button></view>
     </view>
   </view>
@@ -390,5 +494,86 @@ const lines = computed(() => {
   .line.bad {
     color: #c0392b;
   }
+}
+
+.monitor-box {
+  margin: 24rpx 32rpx;
+  padding: 24rpx;
+  border-radius: 12rpx;
+  background: #fff;
+}
+
+.monitor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16rpx;
+}
+
+.monitor-title {
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.monitor-btns {
+  display: flex;
+  gap: 12rpx;
+}
+
+.m-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12rpx;
+  text-align: center;
+}
+
+.m-val {
+  font-size: 26rpx;
+  font-weight: 600;
+
+  &.good {
+    color: #27ae60;
+  }
+
+  &.bad {
+    color: #c0392b;
+  }
+}
+
+.m-lbl {
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  color: #8a8378;
+}
+
+.m-sub {
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+}
+
+.m-actions {
+  margin-top: 12rpx;
+  padding-top: 12rpx;
+  border-top: 1rpx solid var(--line);
+}
+
+.m-action-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6rpx 0;
+  font-size: 22rpx;
+}
+
+.a-name {
+  min-width: 110rpx;
+  font-weight: 500;
+}
+
+.m-err {
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: #c0392b;
+  word-break: break-all;
 }
 </style>

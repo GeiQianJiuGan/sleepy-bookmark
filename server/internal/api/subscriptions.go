@@ -3,11 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -26,15 +28,23 @@ var subscriptionClient = &http.Client{Timeout: 20 * time.Second, Transport: sour
 var (
 	reGitHubBlob = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/(?:blob|raw)/(.+)$`)
 	reGist       = regexp.MustCompile(`^https://gist\.github\.com/([^/]+)/([0-9a-f]+)/?$`)
+	reGiteeBlob  = regexp.MustCompile(`^https://gitee\.com/([^/]+)/([^/]+)/blob/(.+)$`)
+	reGitLabBlob = regexp.MustCompile(`^(https://[^/]+/.+?)/-/blob/(.+)$`)
 )
 
-// fileURL turns the address of a file's page on GitHub into the address of the file itself.
+// fileURL turns the address of a file's page on GitHub/Gist/Gitee/GitLab into the raw file URL.
 func fileURL(u string) string {
 	if m := reGitHubBlob.FindStringSubmatch(u); m != nil {
 		return "https://raw.githubusercontent.com/" + m[1] + "/" + m[2] + "/" + m[3]
 	}
 	if m := reGist.FindStringSubmatch(u); m != nil {
 		return "https://gist.githubusercontent.com/" + m[1] + "/" + m[2] + "/raw"
+	}
+	if m := reGiteeBlob.FindStringSubmatch(u); m != nil {
+		return "https://gitee.com/" + m[1] + "/" + m[2] + "/raw/" + m[3]
+	}
+	if m := reGitLabBlob.FindStringSubmatch(u); m != nil {
+		return m[1] + "/-/raw/" + m[2]
 	}
 	return u
 }
@@ -43,6 +53,41 @@ func fileURL(u string) string {
 type skipped struct {
 	Name  string `json:"name"`
 	Error string `json:"error"`
+}
+
+func parseRuleList(raws []json.RawMessage) ([]*source.Source, []skipped) {
+	var rules []*source.Source
+	var left []skipped
+	seen := map[string]bool{}
+	for i, raw := range raws {
+		src, err := source.ParseSourceFlexible(raw)
+		name := fmt.Sprintf("第 %d 个", i+1)
+		if src != nil && src.Name != "" {
+			name = src.Name
+		} else {
+			var probe struct {
+				Name           string `json:"name"`
+				BookSourceName string `json:"bookSourceName"`
+			}
+			if json.Unmarshal(raw, &probe) == nil {
+				if probe.Name != "" {
+					name = probe.Name
+				} else if probe.BookSourceName != "" {
+					name = probe.BookSourceName
+				}
+			}
+		}
+		switch {
+		case err != nil:
+			left = append(left, skipped{name, err.Error()})
+		case seen[nameKey(src.Type, src.Name)]:
+			left = append(left, skipped{name, "列表里有重名的书源"})
+		default:
+			seen[nameKey(src.Type, src.Name)] = true
+			rules = append(rules, src)
+		}
+	}
+	return rules, left
 }
 
 // fetchRules downloads a subscribed list. Rules that are not valid are left out and reported:
@@ -75,25 +120,7 @@ func fetchRules(ctx context.Context, u string) ([]*source.Source, []skipped, err
 	if err != nil {
 		return nil, nil, err
 	}
-	var rules []*source.Source
-	var left []skipped
-	seen := map[string]bool{}
-	for i, raw := range raws {
-		src, err := source.ParseSource(raw)
-		name := fmt.Sprintf("第 %d 个", i+1)
-		if src != nil && src.Name != "" {
-			name = src.Name
-		}
-		switch {
-		case err != nil:
-			left = append(left, skipped{name, err.Error()})
-		case seen[nameKey(src.Type, src.Name)]:
-			left = append(left, skipped{name, "列表里有重名的书源"})
-		default:
-			seen[nameKey(src.Type, src.Name)] = true
-			rules = append(rules, src)
-		}
-	}
+	rules, left := parseRuleList(raws)
 	if len(rules) == 0 {
 		msg := "订阅里没有可用的书源"
 		if len(left) > 0 {
@@ -232,4 +259,102 @@ func (s *Server) deleteSubscription(c echo.Context) error {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// syncAllSubscriptions syncs every configured subscription in order and reports a combined summary.
+func (s *Server) syncAllSubscriptions(c echo.Context) error {
+	subs, err := s.db.Subscriptions()
+	if err != nil {
+		return err
+	}
+	type subOutcome struct {
+		ID      int64     `json:"id"`
+		Name    string    `json:"name"`
+		Added   int       `json:"added"`
+		Updated int       `json:"updated"`
+		Skipped []skipped `json:"skipped"`
+		Error   string    `json:"error,omitempty"`
+	}
+	outcomes := make([]subOutcome, 0, len(subs))
+	totalAdded, totalUpdated, syncedCount, failedCount := 0, 0, 0, 0
+	for _, sub := range subs {
+		rules, left, err := fetchRules(c.Request().Context(), sub.URL)
+		if err != nil {
+			msg := err.Error()
+			var he *echo.HTTPError
+			if errors.As(err, &he) {
+				if m, ok := he.Message.(string); ok {
+					msg = m
+				}
+			}
+			_ = s.db.SetSubscriptionSynced(sub.ID, msg)
+			failedCount++
+			outcomes = append(outcomes, subOutcome{ID: sub.ID, Name: sub.Name, Skipped: []skipped{}, Error: msg})
+			continue
+		}
+		s.lists.Lock()
+		if _, err := s.db.Subscription(sub.ID); err != nil {
+			s.lists.Unlock()
+			continue
+		}
+		ids, updated, err := s.importRules(rules, sub.ID)
+		if err == nil {
+			err = s.db.SetSubscriptionSynced(sub.ID, "")
+		}
+		s.lists.Unlock()
+		if err != nil {
+			failedCount++
+			outcomes = append(outcomes, subOutcome{ID: sub.ID, Name: sub.Name, Skipped: []skipped{}, Error: err.Error()})
+			continue
+		}
+		if left == nil {
+			left = []skipped{}
+		}
+		added := len(ids) - updated
+		totalAdded += added
+		totalUpdated += updated
+		syncedCount++
+		outcomes = append(outcomes, subOutcome{ID: sub.ID, Name: sub.Name, Added: added, Updated: updated, Skipped: left})
+	}
+	return c.JSON(http.StatusOK, echo.Map{
+		"synced":  syncedCount,
+		"failed":  failedCount,
+		"added":   totalAdded,
+		"updated": totalUpdated,
+		"results": outcomes,
+	})
+}
+
+// ServeSourcesFeed mounts a public read-only JSON endpoint so an operator can host their own
+// subscription list directly from this server via SOURCES_FEED_FILE.
+func ServeSourcesFeed(e *echo.Echo, filePath string) {
+	e.GET("/api/sources/feed.json", func(c echo.Context) error {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, "书源订阅文件不可用")
+		}
+		if len(data) > maxRules {
+			return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "订阅文件超过 2 MB")
+		}
+		c.Response().Header().Set("Cache-Control", "public, max-age=300")
+		return c.Blob(http.StatusOK, "application/json; charset=utf-8", data)
+	})
+}
+
+// LoadRulesFile reads a local JSON source rule file (single object, array, or {sources:[...]})
+// and returns all valid rules along with the number of skipped entries.
+func LoadRulesFile(filePath string) ([]*source.Source, int, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(data) > maxRules {
+		return nil, 0, errors.New("书源文件超过 2 MB")
+	}
+	raws, err := splitRules(data)
+	if err != nil {
+		return nil, 0, err
+	}
+	rules, left := parseRuleList(raws)
+	return rules, len(left), nil
 }

@@ -1,20 +1,25 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { api, type Source, type Subscription, type SyncResult } from '@/api'
+import { api, type MonitorSummary, type Source, type SourceMetrics, type Subscription, type SyncResult } from '@/api'
 import { toastError } from '@/api/http'
 
 const sources = ref<Source[]>([])
 const subscriptions = ref<Subscription[]>([])
+const summary = ref<MonitorSummary | null>(null)
 const loading = ref(true)
-/** The subscription being synced, -1 while a new one is being added. */
+/** The subscription being synced, -1 while a new one is being added, -2 while syncing all. */
 const syncing = ref(0)
+const checking = ref(false)
 const adding = ref(false)
 const url = ref('')
 
 async function load() {
   try {
-    ;[sources.value, subscriptions.value] = await Promise.all([api.sources(), api.subscriptions()])
+    const [list, subs, report] = await Promise.all([api.sources(), api.subscriptions(), api.sourceMetrics()])
+    sources.value = list
+    subscriptions.value = subs
+    summary.value = report.summary
   } catch (e) {
     toastError(e)
   } finally {
@@ -39,14 +44,71 @@ const importJSON = () => uni.navigateTo({ url: '/pages/sources/edit?json=1' })
 
 function add() {
   uni.showActionSheet({
-    itemList: ['填名称和地址（自动识别）', '导入 JSON 规则', '订阅书源列表（网址）'],
+    itemList: ['填名称和地址（自动识别）', '导入 JSON 规则（支持源包/阅读格式）', '订阅书源列表（网址）', '导出全部书源 JSON'],
     success: ({ tapIndex }) => {
       if (tapIndex === 0) edit()
       else if (tapIndex === 1) importJSON()
-      else adding.value = true
+      else if (tapIndex === 2) adding.value = true
+      else exportAll()
     },
   })
 }
+
+async function exportAll() {
+  try {
+    const rules = await api.exportSources()
+    if (!rules.length) return uni.showToast({ title: '暂无书源可导出', icon: 'none' })
+    const json = JSON.stringify(rules, null, 2)
+    uni.setClipboardData({
+      data: json,
+      success: () => uni.showToast({ title: `已复制 ${rules.length} 个书源 JSON`, icon: 'none' }),
+    })
+  } catch (e) {
+    toastError(e)
+  }
+}
+
+async function checkAll() {
+  if (checking.value || !sources.value.length) return
+  checking.value = true
+  try {
+    await api.checkSources()
+    await load()
+    uni.showToast({ title: '检测完成', icon: 'none' })
+  } catch (e) {
+    toastError(e)
+  } finally {
+    checking.value = false
+  }
+}
+
+async function syncAll() {
+  if (syncing.value || !subscriptions.value.length) return
+  syncing.value = -2
+  try {
+    const r = await api.syncAllSubscriptions()
+    const parts = [`同步 ${r.synced} 个`, `新增 ${r.added} 个`, `更新 ${r.updated} 个`]
+    if (r.failed) parts.push(`失败 ${r.failed} 个`)
+    uni.showToast({ title: parts.join('，'), icon: 'none' })
+  } catch (e) {
+    toastError(e)
+  } finally {
+    syncing.value = 0
+    load()
+  }
+}
+
+function pct(rate: number) {
+  return `${Math.round(rate * 100)}%`
+}
+
+function qualityClass(m: SourceMetrics) {
+  if (m.validRate >= 0.8) return 'good'
+  if (m.validRate >= 0.5) return 'warn'
+  return 'bad'
+}
+
+const hasMetrics = computed(() => Boolean(summary.value && summary.value.totalRequests > 0))
 
 function told(r: SyncResult) {
   const parts = [`新增 ${r.added} 个`, `更新 ${r.updated} 个`]
@@ -121,8 +183,40 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
 
 <template>
   <view class="list">
+    <view v-if="sources.length" class="monitor-card">
+      <view class="monitor-head">
+        <view class="monitor-title">数据源监听</view>
+        <view class="monitor-actions">
+          <wd-button size="small" plain :loading="checking" @click="checkAll">检测全部</wd-button>
+          <wd-button size="small" plain @click="exportAll">导出</wd-button>
+        </view>
+      </view>
+      <view v-if="hasMetrics && summary" class="monitor-grid">
+        <view class="stat">
+          <view class="stat-val">{{ summary.avgLatencyMs }}ms</view>
+          <view class="stat-lbl">平均响应</view>
+        </view>
+        <view class="stat">
+          <view class="stat-val good">{{ pct(summary.validRate) }}</view>
+          <view class="stat-lbl">有效内容率</view>
+        </view>
+        <view class="stat">
+          <view class="stat-val bad">{{ pct(summary.invalidRate) }}</view>
+          <view class="stat-lbl">无效内容率</view>
+        </view>
+        <view class="stat">
+          <view class="stat-val">{{ summary.validRequests }}/{{ summary.totalRequests }}</view>
+          <view class="stat-lbl">有效/总请求</view>
+        </view>
+      </view>
+      <view v-else class="muted monitor-empty">暂无监听数据，搜索阅读或点击「检测全部」开始采样响应时间与有效率</view>
+    </view>
+
     <template v-if="subscriptions.length || adding">
-      <view class="heading muted">订阅</view>
+      <view class="heading-row">
+        <view class="heading muted">订阅</view>
+        <text v-if="subscriptions.length > 1" class="sync-all" @click="syncAll">{{ syncing === -2 ? '同步中…' : '全部同步' }}</text>
+      </view>
       <view v-for="sub in subscriptions" :key="sub.id" class="source" @click="manage(sub)">
         <view class="main">
           <view class="name">{{ sub.name }}</view>
@@ -140,7 +234,7 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
           <text class="link" @click="paste">粘贴</text>
         </view>
         <view class="muted tip">
-          可以是 GitHub 上 JSON 文件的页面地址或 Raw 地址。列表里是本应用格式的书源（一个或一组）；之后点「同步」可按列表更新。
+          支持 GitHub / Gist / Gitee / GitLab 页面地址或 Raw 地址，支持本应用规则、源包及声明式阅读（Legado）JSON。
         </view>
         <view class="row buttons">
           <wd-button size="small" plain @click="adding = false">取消</wd-button>
@@ -158,6 +252,15 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
           <text v-if="s.auto" class="auto">自动识别</text>
         </view>
         <view class="muted ellipsis">{{ s.rule.baseUrl }}{{ from(s) ? ' · 来自订阅「' + from(s) + '」' : '' }}</view>
+        <view v-if="s.metrics && s.metrics.total > 0" class="metrics-row">
+          <text class="dot" :class="qualityClass(s.metrics)" />
+          <text class="metric-text">
+            响应 {{ s.metrics.avgLatencyMs }}ms (近 {{ s.metrics.lastLatencyMs }}ms) · 有效率 {{ pct(s.metrics.validRate) }} ({{ s.metrics.valid }}/{{ s.metrics.total }})
+          </text>
+          <text v-if="s.metrics.invalid > 0" class="metric-bad">
+            · 无效 {{ pct(s.metrics.invalidRate) }}
+          </text>
+        </view>
         <view v-if="s.health" class="health ellipsis">
           {{ s.health.pausedUntil * 1000 > Date.now() ? '搜索连续失败，暂时跳过' : '最近一次搜索失败' }}：{{ s.health.lastError }}
         </view>
@@ -172,6 +275,106 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
 </template>
 
 <style lang="scss" scoped>
+.monitor-card {
+  margin: 20rpx 24rpx 8rpx;
+  padding: 24rpx 28rpx;
+  border-radius: 16rpx;
+  background: #fff;
+}
+
+.monitor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16rpx;
+}
+
+.monitor-title {
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.monitor-actions {
+  display: flex;
+  gap: 12rpx;
+}
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12rpx;
+  text-align: center;
+}
+
+.stat-val {
+  font-size: 28rpx;
+  font-weight: 600;
+
+  &.good {
+    color: #27ae60;
+  }
+
+  &.bad {
+    color: #c0392b;
+  }
+}
+
+.stat-lbl {
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  color: #8a8378;
+}
+
+.monitor-empty {
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 32rpx;
+}
+
+.sync-all {
+  font-size: 24rpx;
+  color: #c0392b;
+}
+
+.metrics-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #6b655c;
+}
+
+.dot {
+  display: inline-block;
+  width: 12rpx;
+  height: 12rpx;
+  margin-right: 8rpx;
+  border-radius: 50%;
+
+  &.good {
+    background: #27ae60;
+  }
+
+  &.warn {
+    background: #d68910;
+  }
+
+  &.bad {
+    background: #c0392b;
+  }
+}
+
+.metric-bad {
+  color: #c0392b;
+}
+
 .heading {
   padding: 24rpx 32rpx 12rpx;
 }

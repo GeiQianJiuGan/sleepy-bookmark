@@ -23,6 +23,8 @@ type sourceView struct {
 	Auto bool `json:"auto"`
 	// Health is null while the source works.
 	Health *library.Health `json:"health"`
+	// Metrics holds cumulative response times and valid/invalid content ratios, null before first use.
+	Metrics *library.SourceMetrics `json:"metrics"`
 }
 
 func (s *Server) listSources(c echo.Context) error {
@@ -32,7 +34,7 @@ func (s *Server) listSources(c echo.Context) error {
 	}
 	out := make([]sourceView, len(rows))
 	for i, r := range rows {
-		out[i] = sourceView{r, json.RawMessage(r.Rule), false, s.lib.Health(r.ID)}
+		out[i] = sourceView{r, json.RawMessage(r.Rule), false, s.lib.Health(r.ID), s.lib.Metrics(r.ID)}
 		if rule, err := source.ParseSource([]byte(r.Rule)); err == nil {
 			out[i].Auto = rule.IsAuto()
 		}
@@ -43,20 +45,32 @@ func (s *Server) listSources(c echo.Context) error {
 // maxRules bounds a rule document, pasted or fetched.
 const maxRules = 2 << 20
 
-// splitRules takes a rule document apart: one rule object or an array of them.
+// splitRules takes a rule document apart: one rule object, an array of them, or a bundle object
+// containing a "sources" array.
 func splitRules(body []byte) ([]json.RawMessage, error) {
 	body = bytes.TrimSpace(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf")))
-	if len(body) == 0 || body[0] != '[' {
+	if len(body) == 0 {
 		return []json.RawMessage{body}, nil
 	}
-	var raws []json.RawMessage
-	if err := json.Unmarshal(body, &raws); err != nil {
-		return nil, badRequest("JSON 格式错误：" + err.Error())
+	if body[0] == '[' {
+		var raws []json.RawMessage
+		if err := json.Unmarshal(body, &raws); err != nil {
+			return nil, badRequest("JSON 格式错误：" + err.Error())
+		}
+		return raws, nil
 	}
-	return raws, nil
+	if body[0] == '{' {
+		var bundle struct {
+			Sources []json.RawMessage `json:"sources"`
+		}
+		if err := json.Unmarshal(body, &bundle); err == nil && bundle.Sources != nil {
+			return bundle.Sources, nil
+		}
+	}
+	return []json.RawMessage{body}, nil
 }
 
-// readRules accepts one rule object or an array of them.
+// readRules accepts one rule object or an array of them (native or compatible Legado JSON).
 func readRules(c echo.Context) ([]*source.Source, error) {
 	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxRules))
 	if err != nil {
@@ -68,7 +82,7 @@ func readRules(c echo.Context) ([]*source.Source, error) {
 	}
 	out := make([]*source.Source, 0, len(raws))
 	for _, raw := range raws {
-		src, err := source.ParseSource(raw)
+		src, err := source.ParseSourceFlexible(raw)
 		if err != nil {
 			return nil, badRequest("书源规则无效：" + err.Error())
 		}
@@ -81,7 +95,39 @@ func nameKey(typ, name string) string { return typ + "\x00" + name }
 
 // createSources imports rules. A rule named like exactly one existing source of the same type
 // replaces that source's rule, so that re-importing a newer list keeps the shelf and the history.
+// With ?skipInvalid=1, bad or duplicate entries are skipped and reported instead of rejecting the batch.
 func (s *Server) createSources(c echo.Context) error {
+	if c.QueryParam("skipInvalid") == "1" {
+		body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxRules))
+		if err != nil {
+			return err
+		}
+		raws, err := splitRules(body)
+		if err != nil {
+			return err
+		}
+		rules, left := parseRuleList(raws)
+		if len(rules) == 0 {
+			msg := "导入内容里没有可用的书源"
+			if len(left) > 0 {
+				msg += "：" + left[0].Name + " " + left[0].Error
+			}
+			return badRequest(msg)
+		}
+		ids, updated, err := s.importRules(rules, 0)
+		if err != nil {
+			return err
+		}
+		if left == nil {
+			left = []skipped{}
+		}
+		return c.JSON(http.StatusOK, echo.Map{
+			"ids":     ids,
+			"added":   len(ids) - updated,
+			"updated": updated,
+			"skipped": left,
+		})
+	}
 	rules, err := readRules(c)
 	if err != nil {
 		return err
@@ -174,7 +220,7 @@ func (s *Server) replaceRule(row *store.SourceRow, rule *source.Source) error {
 	if err := s.db.UpdateSource(id, rule.Name, rule.Type, string(raw)); err != nil {
 		return err
 	}
-	s.lib.ResetHealth(id)
+	_ = s.lib.ResetMetrics(id)
 	// What was fetched with the old rule must not outlive it.
 	old, _ := source.ParseSource([]byte(row.Rule))
 	if catalog, content := rulesChanged(old, rule); catalog {
@@ -246,6 +292,7 @@ func (s *Server) removeSource(id int64) error {
 	if err := s.db.DeleteSource(id); err != nil {
 		return err
 	}
+	_ = s.lib.ResetMetrics(id)
 	for _, bookID := range bookIDs {
 		s.disk.RemoveBook(bookID)
 	}
@@ -291,4 +338,63 @@ func (s *Server) testSource(c echo.Context) error {
 		rules[0].Public = len(same) == 1 && same[0].Listed
 	}
 	return c.JSON(http.StatusOK, s.lib.TestSource(c.Request().Context(), rules[0], key))
+}
+
+// exportSources returns stored source rules as a JSON array ready to save or publish as a subscription.
+func (s *Server) exportSources(c echo.Context) error {
+	rows, err := s.db.Sources(c.QueryParam("type"), c.QueryParam("enabled") == "1")
+	if err != nil {
+		return err
+	}
+	out := make([]json.RawMessage, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, json.RawMessage(r.Rule))
+	}
+	c.Response().Header().Set("Content-Disposition", `attachment; filename="sleepy-bookmark-sources.json"`)
+	return c.JSONPretty(http.StatusOK, out, "  ")
+}
+
+// sourceMetrics returns response latency and valid/invalid content ratios across all sources.
+func (s *Server) sourceMetrics(c echo.Context) error {
+	list, summary, err := s.lib.AllMetrics(c.QueryParam("type"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, echo.Map{"summary": summary, "sources": list})
+}
+
+// checkSources actively probes one source (?id=) or all enabled sources and updates monitoring stats.
+func (s *Server) checkSources(c echo.Context) error {
+	keyword := c.QueryParam("q")
+	if idStr := c.QueryParam("id"); idStr != "" {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			return badRequest("无效的 id")
+		}
+		m, err := s.lib.CheckSource(c.Request().Context(), id, keyword)
+		if err != nil {
+			return err
+		}
+		return c.JSON(http.StatusOK, m)
+	}
+	list, summary, err := s.lib.CheckAllSources(c.Request().Context(), c.QueryParam("type"), keyword)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, echo.Map{"summary": summary, "sources": list})
+}
+
+// resetSourceMetrics clears recorded latency and valid/invalid counters for one source.
+func (s *Server) resetSourceMetrics(c echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Source(id); err != nil {
+		return err
+	}
+	if err := s.lib.ResetMetrics(id); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
 }

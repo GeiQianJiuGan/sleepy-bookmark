@@ -44,6 +44,60 @@ export interface ChapterContent extends Chapter {
   nextId: number
 }
 
+export interface ActionMetrics {
+  total: number
+  valid: number
+  invalid: number
+  empty: number
+  error: number
+  validRate: number
+  invalidRate: number
+  avgLatencyMs: number
+  lastLatencyMs: number
+}
+
+export interface SourceMetrics {
+  sourceId: number
+  sourceName?: string
+  sourceType?: Mode
+  total: number
+  valid: number
+  invalid: number
+  empty: number
+  error: number
+  validRate: number
+  invalidRate: number
+  avgLatencyMs: number
+  lastLatencyMs: number
+  minLatencyMs: number
+  maxLatencyMs: number
+  p95LatencyMs: number
+  lastStatus: '' | 'valid' | 'empty' | 'error'
+  lastError?: string
+  lastErrorKind?: string
+  lastCheckedAt: number
+  actions?: Record<string, ActionMetrics>
+}
+
+export interface MonitorSummary {
+  totalSources: number
+  monitoredSources: number
+  healthySources: number
+  degradedSources: number
+  unhealthySources: number
+  totalRequests: number
+  validRequests: number
+  invalidRequests: number
+  validRate: number
+  invalidRate: number
+  avgLatencyMs: number
+}
+
+export interface MetricsReport {
+  summary: MonitorSummary
+  sources: SourceMetrics[]
+}
+
 export interface Source {
   id: number
   name: string
@@ -57,6 +111,23 @@ export interface Source {
   subscriptionId?: number
   /** Recent failures to reach the source; null while it works. */
   health: { failures: number; lastError: string; lastErrorAt: number; pausedUntil: number } | null
+  /** Cumulative response time and valid/invalid content ratio; null before first query. */
+  metrics?: SourceMetrics | null
+}
+
+export interface ImportResult {
+  ids: number[]
+  added?: number
+  updated?: number
+  skipped?: { name: string; error: string }[]
+}
+
+export interface SyncAllResult {
+  synced: number
+  failed: number
+  added: number
+  updated: number
+  results: { id: number; name: string; added: number; updated: number; skipped: { name: string; error: string }[]; error?: string }[]
 }
 
 export interface Subscription {
@@ -82,6 +153,7 @@ export interface SyncResult {
 export interface TestReport {
   failedStep?: 'search' | 'recommend' | 'detail' | 'toc' | 'content'
   error?: string
+  latencyMs?: number
   searchUrl?: string
   searchCount?: number
   book?: { title: string }
@@ -154,10 +226,22 @@ export const api = {
   removeHistory: (bookId?: number) => request('DELETE', bookId ? `/history/${bookId}` : '/history'),
 
   sources: (type?: Mode) => request<Source[]>('GET', type ? `/sources?type=${type}` : '/sources'),
-  createSources: (rules: unknown) => request<{ ids: number[]; updated?: number }>('POST', '/sources', rules),
+  createSources: (rules: unknown, skipInvalid = false) =>
+    request<ImportResult>('POST', skipInvalid ? '/sources?skipInvalid=1' : '/sources', rules),
   updateSource: (id: number, rule: unknown) => request('PUT', `/sources/${id}`, rule),
   setSourceEnabled: (id: number, enabled: boolean) => request('PUT', `/sources/${id}/enabled`, { enabled }),
   deleteSource: (id: number) => request('DELETE', `/sources/${id}`),
+  exportSources: (type?: Mode) => request<Record<string, unknown>[]>('GET', type ? `/sources/export?type=${type}` : '/sources/export'),
+  sourceMetrics: (type?: Mode) => request<MetricsReport>('GET', type ? `/sources/metrics?type=${type}` : '/sources/metrics'),
+  checkSources: (opt: { id?: number; type?: Mode; q?: string } = {}) => {
+    const params: string[] = []
+    if (opt.id) params.push(`id=${opt.id}`)
+    if (opt.type) params.push(`type=${opt.type}`)
+    if (opt.q) params.push(`q=${q(opt.q)}`)
+    const qs = params.length ? `?${params.join('&')}` : ''
+    return request<MetricsReport | SourceMetrics>('POST', `/sources/monitor/check${qs}`)
+  },
+  resetSourceMetrics: (id: number) => request('DELETE', `/sources/${id}/metrics`),
   /**
    * Without a keyword the book to try comes from the source's home page or recommendations.
    * The id of the source that the rule is an edit of has it read the way that source is.
@@ -169,6 +253,7 @@ export const api = {
   /** Subscribing to a URL that is subscribed already syncs it. */
   subscribe: (url: string) => request<SyncResult>('POST', '/subscriptions', { url }),
   syncSubscription: (id: number) => request<SyncResult>('POST', `/subscriptions/${id}/sync`),
+  syncAllSubscriptions: () => request<SyncAllResult>('POST', '/subscriptions/sync-all'),
   deleteSubscription: (id: number, withSources: boolean) =>
     request('DELETE', `/subscriptions/${id}${withSources ? '?sources=1' : ''}`),
 }

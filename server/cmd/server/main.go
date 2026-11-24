@@ -49,6 +49,23 @@ func main() {
 		}
 		log.Printf("demo sources enabled at %s/demo", cfg.PublicURL)
 	}
+	if cfg.SourcesFeedFile != "" {
+		api.ServeSourcesFeed(e, cfg.SourcesFeedFile)
+		log.Printf("sources subscription feed enabled at %s/api/sources/feed.json (%s)", cfg.PublicURL, cfg.SourcesFeedFile)
+	}
+	if cfg.SeedSourcesFile != "" {
+		rules, skippedCount, err := api.LoadRulesFile(cfg.SeedSourcesFile)
+		if err != nil {
+			log.Printf("seed sources file %q failed: %v", cfg.SeedSourcesFile, err)
+		} else {
+			for _, src := range rules {
+				if err := lib.SeedSource(*src); err != nil {
+					log.Printf("seed source %q failed: %v", src.Name, err)
+				}
+			}
+			log.Printf("seed sources loaded from %s: %d valid, %d skipped", cfg.SeedSourcesFile, len(rules), skippedCount)
+		}
+	}
 	if cfg.DevLogin {
 		log.Print("WARNING: DEV_LOGIN is on, anyone who can reach this server is logged in")
 	}

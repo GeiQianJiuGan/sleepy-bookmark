@@ -158,7 +158,9 @@ func (l *Library) recommend(ctx context.Context, row *store.SourceRow) []*store.
 }
 
 func (l *Library) readRecommend(ctx context.Context, row *store.SourceRow, src *source.Source) ([]*store.Book, error) {
+	start := time.Now()
 	infos, err := l.engine.Recommend(ctx, src)
+	l.monitor.Record(row.ID, ActionRecommend, time.Since(start), len(infos) > 0, err)
 	if err != nil {
 		return nil, err
 	}

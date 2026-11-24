@@ -70,6 +70,23 @@ CREATE TABLE IF NOT EXISTS history (
 	updated_at INTEGER NOT NULL,
 	PRIMARY KEY (user_id, book_id)
 );
+CREATE TABLE IF NOT EXISTS source_metrics (
+	source_id       INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+	action          TEXT NOT NULL,
+	total           INTEGER NOT NULL DEFAULT 0,
+	valid           INTEGER NOT NULL DEFAULT 0,
+	empty           INTEGER NOT NULL DEFAULT 0,
+	error           INTEGER NOT NULL DEFAULT 0,
+	total_latency   INTEGER NOT NULL DEFAULT 0,
+	last_latency    INTEGER NOT NULL DEFAULT 0,
+	min_latency     INTEGER NOT NULL DEFAULT 0,
+	max_latency     INTEGER NOT NULL DEFAULT 0,
+	last_status     TEXT NOT NULL DEFAULT '',
+	last_error      TEXT NOT NULL DEFAULT '',
+	last_error_kind TEXT NOT NULL DEFAULT '',
+	last_checked_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (source_id, action)
+);
 `
 
 type DB struct{ *sql.DB }
@@ -308,4 +325,75 @@ func (d *DB) SourcesBySubscription(id int64) ([]*SourceRow, error) {
 		}
 	}
 	return out, nil
+}
+
+// ---- source metrics ----
+
+// SourceMetricRow stores cumulative monitoring statistics for one (source, action) pair.
+type SourceMetricRow struct {
+	SourceID      int64
+	Action        string
+	Total         int64
+	Valid         int64
+	Empty         int64
+	Error         int64
+	TotalLatency  int64
+	LastLatency   int64
+	MinLatency    int64
+	MaxLatency    int64
+	LastStatus    string
+	LastError     string
+	LastErrorKind string
+	LastCheckedAt int64
+}
+
+func (d *DB) LoadSourceMetrics() ([]*SourceMetricRow, error) {
+	rows, err := d.Query(`SELECT source_id, action, total, valid, empty, error,
+		total_latency, last_latency, min_latency, max_latency,
+		last_status, last_error, last_error_kind, last_checked_at
+		FROM source_metrics ORDER BY source_id, action`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*SourceMetricRow{}
+	for rows.Next() {
+		var r SourceMetricRow
+		if err := rows.Scan(&r.SourceID, &r.Action, &r.Total, &r.Valid, &r.Empty, &r.Error,
+			&r.TotalLatency, &r.LastLatency, &r.MinLatency, &r.MaxLatency,
+			&r.LastStatus, &r.LastError, &r.LastErrorKind, &r.LastCheckedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &r)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) UpsertSourceMetric(m *SourceMetricRow) error {
+	_, err := d.Exec(`INSERT INTO source_metrics
+		(source_id, action, total, valid, empty, error, total_latency, last_latency, min_latency, max_latency,
+		 last_status, last_error, last_error_kind, last_checked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(source_id, action) DO UPDATE SET
+			total = excluded.total,
+			valid = excluded.valid,
+			empty = excluded.empty,
+			error = excluded.error,
+			total_latency = excluded.total_latency,
+			last_latency = excluded.last_latency,
+			min_latency = excluded.min_latency,
+			max_latency = excluded.max_latency,
+			last_status = excluded.last_status,
+			last_error = excluded.last_error,
+			last_error_kind = excluded.last_error_kind,
+			last_checked_at = excluded.last_checked_at`,
+		m.SourceID, m.Action, m.Total, m.Valid, m.Empty, m.Error,
+		m.TotalLatency, m.LastLatency, m.MinLatency, m.MaxLatency,
+		m.LastStatus, m.LastError, m.LastErrorKind, m.LastCheckedAt)
+	return err
+}
+
+func (d *DB) DeleteSourceMetrics(sourceID int64) error {
+	_, err := d.Exec(`DELETE FROM source_metrics WHERE source_id = ?`, sourceID)
+	return err
 }
