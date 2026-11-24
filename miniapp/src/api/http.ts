@@ -47,19 +47,41 @@ function send<T>(method: Method, path: string, data?: unknown, token?: string): 
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function loginCode(): Promise<string> {
+/** What the server needs to log this device in. */
+interface Credential {
+  code: string
+  /** AppID the mini program is running under, so the server can tell when it is not its own. */
+  appId?: string
+}
+
+// #ifdef MP-WEIXIN
+function runningAppId(): string {
+  try {
+    return uni.getAccountInfoSync().miniProgram.appId
+  } catch {
+    return ''
+  }
+}
+// #endif
+
+function credential(): Promise<Credential> {
   // #ifdef MP-WEIXIN
   return new Promise((resolve, reject) => {
+    // A code works once and for five minutes, so every attempt asks for a new one.
     uni.login({
       provider: 'weixin',
-      success: (res) => resolve(res.code),
+      timeout: 10_000,
+      success: (res) => {
+        if (res.code) resolve({ code: res.code, appId: runningAppId() })
+        else reject(new ApiError(0, '微信登录失败：' + (res.errMsg || '没有拿到登录凭证')))
+      },
       fail: (err) => reject(new ApiError(0, '微信登录失败：' + (err.errMsg || ''))),
     })
   })
   // #endif
   // #ifndef MP-WEIXIN
   // Outside WeChat only a backend started with DEV_LOGIN=1 accepts this.
-  return Promise.resolve('h5-dev')
+  return Promise.resolve({ code: 'h5-dev' })
   // #endif
 }
 
@@ -152,8 +174,7 @@ function accessToken(): Promise<string> {
 /** Logs in through wx.login. Only the login page calls this, after the user agreed to the privacy policy. */
 export async function login(): Promise<void> {
   const started = epoch
-  const code = await loginCode()
-  saveSession(await send<Session>('POST', '/auth/login', { code }), started)
+  saveSession(await send<Session>('POST', '/auth/login', await credential()), started)
 }
 
 export function logout() {

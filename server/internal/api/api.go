@@ -3,8 +3,10 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 
 	"github.com/labstack/echo/v4"
@@ -108,16 +110,38 @@ func (s *Server) imgURL(sourceID int64, raw string) string {
 func (s *Server) login(c echo.Context) error {
 	var in struct {
 		Code string `json:"code"`
+		// AppID the mini program runs under; lets a mismatch with the server's be reported as such.
+		AppID string `json:"appId"`
 	}
 	if err := c.Bind(&in); err != nil || in.Code == "" {
 		return badRequest("缺少 code")
 	}
-	session, err := s.auth.Login(c.Request().Context(), in.Code)
+	req := c.Request()
+	if m := wxReferer.FindStringSubmatch(req.Referer()); in.AppID == "" && m != nil {
+		in.AppID = m[1]
+	}
+	session, err := s.auth.Login(req.Context(), in.Code, in.AppID)
 	if err != nil {
+		// The code is a credential, so only its length is logged.
+		log.Printf("login failed: %v (client appid %q, code of %d chars, referer %q, user agent %q)",
+			err, clip(in.AppID), len(in.Code), clip(req.Referer()), clip(req.UserAgent()))
 		return err
 	}
 	return c.JSON(http.StatusOK, session)
 }
+
+// clip bounds what a caller who is not logged in can add to the log with one request.
+func clip(s string) string {
+	const limit = 200
+	if len(s) > limit {
+		return s[:limit] + "…"
+	}
+	return s
+}
+
+// wxReferer is the Referer WeChat puts on every request of a mini program; it names the AppID
+// the mini program runs under.
+var wxReferer = regexp.MustCompile(`^https://servicewechat\.com/([^/]+)/`)
 
 // refresh renews a session without another wx.login. 401 means the client has to log in again.
 func (s *Server) refresh(c echo.Context) error {
