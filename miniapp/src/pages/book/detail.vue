@@ -61,7 +61,7 @@ async function loadToc(refresh = false) {
 async function switchSource() {
   if (switching.value) return
   switching.value = true
-  uni.showLoading({ title: '正在其他书源中查找' })
+  uni.showLoading({ title: '正在其他书源中查找', mask: true })
   try {
     alternatives.value = await api.alternatives(bookId)
   } catch {
@@ -78,14 +78,18 @@ async function switchSource() {
   uni.showActionSheet({
     itemList: found.slice(0, 6).map((b) => `${b.sourceName} · ${b.author || '未知作者'}`),
     success: async ({ tapIndex }) => {
+      // One switch at a time: a second one would start from the same shelf entry.
+      if (switching.value) return
+      switching.value = true
       const to = found[tapIndex]
-      uni.showLoading({ title: '正在换源' })
+      uni.showLoading({ title: '正在换源', mask: true })
       try {
         await api.switchSource(bookId, to.id)
         uni.hideLoading()
         uni.redirectTo({ url: `/pages/book/detail?id=${to.id}` })
       } catch (e) {
         uni.hideLoading()
+        switching.value = false
         uni.showToast({ title: sourceDown(e) ? '这个书源也打不开，换一个试试' : errorText(e), icon: 'none' })
       }
     },
