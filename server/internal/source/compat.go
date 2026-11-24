@@ -260,6 +260,30 @@ func plainLegado(rule string) string {
 	return rule
 }
 
+// legadoBars writes the single bars between alternatives as double ones, leaving those inside
+// an attribute selector such as [lang|=zh] as they are.
+func legadoBars(s string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range s {
+		switch r {
+		case '[':
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+		case '|':
+			if depth == 0 {
+				b.WriteString("||")
+				continue
+			}
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // legadoImages turns a comic's content rule into one that reads picture addresses: such
 // rules often name the block the pictures are in, or ask for its html.
 func legadoImages(expr string) string {
@@ -345,8 +369,8 @@ func convertLegadoExpr(raw string, isList bool) string {
 		s = strings.TrimSpace(s[:idx])
 	}
 	// Some lists write alternatives with one bar; XPath has its own meaning for it.
-	if isList && !strings.Contains(s, "||") && !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "./") && !strings.HasPrefix(strings.ToLower(s), "@xpath:") && !strings.Contains(s, "[") {
-		s = strings.ReplaceAll(s, "|", "||")
+	if isList && !strings.Contains(s, "||") && !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "./") && !strings.HasPrefix(strings.ToLower(s), "@xpath:") {
+		s = legadoBars(s)
 	}
 	// When fallback alternatives are separated by || or &&, take the first branch.
 	if idx := strings.Index(s, "||"); idx >= 0 {
