@@ -37,7 +37,10 @@ const (
 	devOpenID  = "dev"
 	// devCode is what a client outside WeChat (the H5 build) sends instead of a wx.login code.
 	devCode = "h5-dev"
-	userKey = "userID"
+	// mockCode is what WeChat DevTools hands to wx.login when the WeChat account logged in to it
+	// is not a developer of the mini program. It is not a credential.
+	mockCode = "the code is a mock one"
+	userKey  = "userID"
 )
 
 var ErrForbidden = errors.New("该微信账号不在白名单内")
@@ -207,6 +210,9 @@ func (a *Auth) wxOpenID(ctx context.Context, code, appID string) (string, error)
 		}
 		return "", echo.NewHTTPError(http.StatusBadRequest,
 			fmt.Sprintf("小程序使用的 AppID（%s）与服务端配置的（%s）不一致", appID, a.cfg.WXAppID))
+	case code == mockCode:
+		return "", echo.NewHTTPError(http.StatusBadRequest,
+			"微信开发者工具返回的是模拟登录凭证：请用该小程序的管理员或开发者微信号登录开发者工具，或在手机上预览")
 	}
 	openid, err := a.code2Session(ctx, code)
 	var refused *wxError
