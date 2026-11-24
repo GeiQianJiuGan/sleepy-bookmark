@@ -744,3 +744,27 @@ func TestFavoritedComicIsSavedOnTheServer(t *testing.T) {
 		t.Fatalf("after deleting the source: %d kept", c.files("kept"))
 	}
 }
+
+func TestRefreshEndpoint(t *testing.T) {
+	c := newClient(t, config.Config{DevLogin: true})
+	var session struct{ Token, RefreshToken string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &session)
+	if session.Token == "" || session.RefreshToken == "" {
+		t.Fatalf("login: %+v", session)
+	}
+	if code := c.do("POST", "/api/auth/refresh", map[string]string{"refreshToken": session.Token}, nil); code != http.StatusUnauthorized {
+		t.Fatalf("refresh with an access token: got %d", code)
+	}
+	var next struct{ Token, RefreshToken string }
+	if code := c.do("POST", "/api/auth/refresh", map[string]string{"refreshToken": session.RefreshToken}, &next); code != http.StatusOK {
+		t.Fatalf("refresh: got %d", code)
+	}
+	c.token = next.Token
+	if code := c.do("GET", "/api/favorites", nil, nil); code != http.StatusOK {
+		t.Fatalf("request with the renewed token: got %d", code)
+	}
+	c.token = next.RefreshToken
+	if code := c.do("GET", "/api/favorites", nil, nil); code != http.StatusUnauthorized {
+		t.Fatalf("request with a refresh token: got %d", code)
+	}
+}

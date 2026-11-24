@@ -89,10 +89,11 @@ func TestOnlyFirstAccountRegistersWithoutWhitelist(t *testing.T) {
 func TestTokenStopsWorkingWhenRemovedFromWhitelist(t *testing.T) {
 	fakeWeChat(t)
 	a := newAuth(t, config.Config{OpenIDWhitelist: []string{"alice", "bob"}})
-	token, err := a.Login(context.Background(), "bob")
+	session, err := a.Login(context.Background(), "bob")
 	if err != nil {
 		t.Fatal(err)
 	}
+	token := session.Token
 	status := func() int {
 		e := echo.New()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -110,5 +111,34 @@ func TestTokenStopsWorkingWhenRemovedFromWhitelist(t *testing.T) {
 	a.cfg.OpenIDWhitelist = []string{"alice"}
 	if got := status(); got != http.StatusUnauthorized {
 		t.Fatalf("removed account: got %d, want 401", got)
+	}
+}
+
+func TestRefreshTokenRenewsTheSessionAndNothingElse(t *testing.T) {
+	fakeWeChat(t)
+	a := newAuth(t, config.Config{OpenIDWhitelist: []string{"alice", "bob"}})
+	session, err := a.Login(context.Background(), "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := func(token string) bool {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		h := a.Middleware(func(c echo.Context) error { return nil })
+		return h(echo.New().NewContext(req, httptest.NewRecorder())) == nil
+	}
+	if !allowed(session.Token) || allowed(session.RefreshToken) {
+		t.Fatal("only the access token may call the API")
+	}
+	if _, err := a.Refresh(session.Token); err == nil {
+		t.Fatal("an access token must not renew the session")
+	}
+	next, err := a.Refresh(session.RefreshToken)
+	if err != nil || !allowed(next.Token) || next.RefreshToken == "" || next.ExpiresIn <= 0 {
+		t.Fatalf("refresh: %+v, %v", next, err)
+	}
+	a.cfg.OpenIDWhitelist = []string{"alice"}
+	if _, err := a.Refresh(next.RefreshToken); err == nil {
+		t.Fatal("an account removed from the whitelist must not renew its session")
 	}
 }

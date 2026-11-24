@@ -1,26 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
 import { API_BASE } from '@/config'
-import { ensureLogin } from '@/api/http'
+import { logout } from '@/api/http'
 import AppBar from '@/components/AppBar.vue'
 
-const status = ref('登录中…')
-const failed = ref(false)
-
-async function login() {
-  status.value = '登录中…'
-  try {
-    await ensureLogin()
-    status.value = '已登录'
-    failed.value = false
-  } catch (e) {
-    status.value = e instanceof Error ? e.message : String(e)
-    failed.value = true
-  }
+function confirmLogout() {
+  uni.showModal({
+    title: '退出登录',
+    content: '退出后需要重新登录。本机的阅读缓存和离线下载会保留。',
+    confirmText: '退出',
+    cancelText: '取消',
+    success: (res) => {
+      if (res.confirm) logout()
+    },
+  })
 }
-
-onShow(login)
 
 const go = (url: string) => uni.navigateTo({ url })
 </script>
@@ -31,16 +24,21 @@ const go = (url: string) => uni.navigateTo({ url })
     <view class="account">
       <view class="avatar">阅</view>
       <view class="who">
-        <view class="state" :class="{ failed }">{{ status }}</view>
+        <view class="state">已登录</view>
         <view class="muted ellipsis">{{ API_BASE }}</view>
       </view>
-      <wd-button v-if="failed" size="small" plain @click="login">重试</wd-button>
     </view>
     <view class="menu">
       <wd-cell-group border>
         <wd-cell title="浏览历史" label="最近读过的小说和漫画" is-link clickable @click="go('/pages/history/history')" />
         <wd-cell title="书源管理" label="新增、导入、启停书源" is-link clickable @click="go('/pages/sources/list')" />
         <wd-cell title="下载与缓存" label="离线内容和占用空间" is-link clickable @click="go('/pages/downloads/downloads')" />
+      </wd-cell-group>
+    </view>
+    <view class="menu">
+      <wd-cell-group border>
+        <wd-cell title="用户协议与隐私政策" is-link clickable @click="go('/pages/login/privacy')" />
+        <wd-cell title="退出登录" clickable @click="confirmLogout" />
       </wd-cell-group>
     </view>
   </view>
@@ -78,16 +76,10 @@ const go = (url: string) => uni.navigateTo({ url })
   margin-bottom: 8rpx;
   font-size: 34rpx;
   font-weight: 600;
-
-  &.failed {
-    font-size: 28rpx;
-    font-weight: 400;
-    color: var(--brand);
-  }
 }
 
 .menu {
-  margin: 0 24rpx;
+  margin: 0 24rpx 24rpx;
   overflow: hidden;
   border-radius: 16rpx;
 }

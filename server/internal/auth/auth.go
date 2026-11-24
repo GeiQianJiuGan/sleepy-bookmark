@@ -28,9 +28,13 @@ import (
 )
 
 const (
-	tokenTTL  = 30 * 24 * time.Hour
-	devOpenID = "dev"
-	userKey   = "userID"
+	// The access token is short-lived; the refresh token renews it without another wx.login.
+	accessTTL  = 2 * time.Hour
+	refreshTTL = 30 * 24 * time.Hour
+	accessAud  = "access"
+	refreshAud = "refresh"
+	devOpenID  = "dev"
+	userKey    = "userID"
 )
 
 var ErrForbidden = errors.New("该微信账号不在白名单内")
@@ -60,13 +64,73 @@ func New(cfg config.Config, db *store.DB) (*Auth, error) {
 	return &Auth{cfg: cfg, db: db, secret: secret}, nil
 }
 
-// Login exchanges a wx.login code for a session token.
-func (a *Auth) Login(ctx context.Context, code string) (string, error) {
+// Session is what a client holds after logging in.
+type Session struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refreshToken"`
+	// ExpiresIn is the lifetime of Token in seconds.
+	ExpiresIn int `json:"expiresIn"`
+}
+
+func (a *Auth) session(userID int64) (*Session, error) {
+	sign := func(aud string, ttl time.Duration) (string, error) {
+		return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+			Subject:   strconv.FormatInt(userID, 10),
+			Audience:  jwt.ClaimStrings{aud},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
+		}).SignedString(a.secret)
+	}
+	token, err := sign(accessAud, accessTTL)
+	if err != nil {
+		return nil, err
+	}
+	refresh, err := sign(refreshAud, refreshTTL)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{Token: token, RefreshToken: refresh, ExpiresIn: int(accessTTL / time.Second)}, nil
+}
+
+// user returns the account a token of the given kind belongs to, if it may still use the server.
+func (a *Auth) user(raw, aud string) (int64, bool) {
+	var claims jwt.RegisteredClaims
+	_, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return a.secret, nil },
+		jwt.WithValidMethods([]string{"HS256"}), jwt.WithAudience(aud), jwt.WithExpirationRequired())
+	if err != nil {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	// Checked every time so that removing an openid from the whitelist takes effect at once
+	// instead of when the token expires.
+	user, err := a.db.User(id)
+	if err != nil || !a.whitelisted(user.OpenID) {
+		return 0, false
+	}
+	return id, true
+}
+
+// ErrExpired means the client has to log in again.
+var ErrExpired = errors.New("登录已过期，请重新登录")
+
+// Refresh exchanges a refresh token for a new session, with a new refresh token.
+func (a *Auth) Refresh(refreshToken string) (*Session, error) {
+	id, ok := a.user(refreshToken, refreshAud)
+	if !ok {
+		return nil, ErrExpired
+	}
+	return a.session(id)
+}
+
+// Login exchanges a wx.login code for a session.
+func (a *Auth) Login(ctx context.Context, code string) (*Session, error) {
 	openid := devOpenID
 	if !a.cfg.DevLogin {
 		var err error
 		if openid, err = a.code2Session(ctx, code); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 	a.loginMu.Lock()
@@ -74,20 +138,17 @@ func (a *Auth) Login(ctx context.Context, code string) (string, error) {
 	user, err := a.db.UserByOpenID(openid)
 	if errors.Is(err, store.ErrNotFound) {
 		if !a.mayRegister(openid) {
-			return "", fmt.Errorf("%w（openid: %s）", ErrForbidden, openid)
+			return nil, fmt.Errorf("%w（openid: %s）", ErrForbidden, openid)
 		}
 		user, err = a.db.CreateUser(openid)
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if !a.whitelisted(openid) {
-		return "", fmt.Errorf("%w（openid: %s）", ErrForbidden, openid)
+		return nil, fmt.Errorf("%w（openid: %s）", ErrForbidden, openid)
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Subject:   strconv.FormatInt(user.ID, 10),
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenTTL)),
-	}).SignedString(a.secret)
+	return a.session(user.ID)
 }
 
 // whitelisted reports whether an existing account may still use the server.
@@ -139,24 +200,12 @@ func (a *Auth) code2Session(ctx context.Context, code string) (string, error) {
 	return out.OpenID, nil
 }
 
-// Middleware requires a valid "Authorization: Bearer <token>" header.
+// Middleware requires a valid "Authorization: Bearer <access token>" header.
 func (a *Auth) Middleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		raw := strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer ")
-		var claims jwt.RegisteredClaims
-		_, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return a.secret, nil },
-			jwt.WithValidMethods([]string{"HS256"}))
-		if err != nil {
-			return echo.NewHTTPError(http.StatusUnauthorized, "未登录或登录已过期")
-		}
-		id, err := strconv.ParseInt(claims.Subject, 10, 64)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusUnauthorized, "无效的登录凭证")
-		}
-		// Checked on every request so that removing an openid from the whitelist takes effect
-		// at once instead of when the token expires.
-		user, err := a.db.User(id)
-		if err != nil || !a.whitelisted(user.OpenID) {
+		id, ok := a.user(raw, accessAud)
+		if !ok {
 			return echo.NewHTTPError(http.StatusUnauthorized, "未登录或登录已过期")
 		}
 		c.Set(userKey, id)

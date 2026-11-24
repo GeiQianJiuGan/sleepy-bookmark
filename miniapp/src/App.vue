@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onLaunch } from '@dcloudio/uni-app'
-import { ensureLogin } from '@/api/http'
+import { hasSession, refreshSession, toLogin } from '@/api/http'
 
 onLaunch(() => {
-  // Pages retry the login themselves; this only warms the token up.
-  ensureLogin().catch(() => {})
+  // A device that has logged in before renews its token; any other starts at the login page.
+  if (hasSession()) refreshSession().catch(() => {})
+  else toLogin()
 })
 </script>
 
