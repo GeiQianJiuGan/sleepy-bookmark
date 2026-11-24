@@ -1,0 +1,23 @@
+{
+  "name": "sleepy-bookmark",
+  "appid": "",
+  "description": "自用小说 / 漫画阅读器",
+  "versionName": "0.1.0",
+  "versionCode": "1",
+  "transformPx": false,
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "minified": true
+    },
+    "usingComponents": true,
+    "lazyCodeLoading": "requiredComponents"
+  },
+  "h5": {
+    "router": { "mode": "hash" }
+  },
+  "uniStatistics": { "enable": false },
+  "vueVersion": "3"
+}
