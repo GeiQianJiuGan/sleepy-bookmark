@@ -40,7 +40,7 @@ func TestReplaceTocKeepsChapterIDsWhenURLsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := db.Chapters(bookID)
-	if err := db.SetChapterCached(before[1].ID, true); err != nil {
+	if err := db.MarkChapterCached(before[1].ID, "{}"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,7 +82,7 @@ func TestReplaceTocKeepsChapterIDsByURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, first := state()
-	if err := db.SetChapterCached(first["b"], true); err != nil {
+	if err := db.MarkChapterCached(first["b"], "{}"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +127,7 @@ func TestReplaceTocDropsCacheWhenTheNextChapterChanges(t *testing.T) {
 	}
 	before, _ := db.Chapters(bookID)
 	for _, c := range before {
-		if err := db.SetChapterCached(c.ID, true); err != nil {
+		if err := db.MarkChapterCached(c.ID, "{}"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -142,5 +142,28 @@ func TestReplaceTocDropsCacheWhenTheNextChapterChanges(t *testing.T) {
 	}
 	if after[2].ID != before[1].ID || !after[2].Cached {
 		t.Fatalf("chapter c should keep its cache: %+v", after[2])
+	}
+}
+
+func TestMarkChapterCachedOnlyForTheCurrentRule(t *testing.T) {
+	db, bookID := newBook(t) // its source has the rule "{}"
+	if _, err := db.ReplaceToc(bookID, entries("a")); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := db.Chapters(bookID)
+	id := list[0].ID
+
+	// Fetched with a rule that has been replaced since: the result must not count as cached.
+	if err := db.MarkChapterCached(id, `{"old":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := db.Chapter(id); c.Cached {
+		t.Fatal("content fetched with an outdated rule was marked cached")
+	}
+	if err := db.MarkChapterCached(id, "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := db.Chapter(id); !c.Cached {
+		t.Fatal("content fetched with the current rule was not marked cached")
 	}
 }

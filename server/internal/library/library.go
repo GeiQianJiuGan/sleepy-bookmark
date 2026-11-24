@@ -259,7 +259,11 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 		return c, nil
 	}
 	v, err, _ := l.flight.Do(fmt.Sprintf("ch:%d", ch.ID), func() (any, error) {
-		src, err := l.loadSource(b.SourceID)
+		row, err := l.db.Source(b.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		src, err := source.ParseSource([]byte(row.Rule))
 		if err != nil {
 			return nil, err
 		}
@@ -277,7 +281,7 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 		if err := l.disk.SaveChapter(b.ID, ch.ID, c); err != nil {
 			return nil, err
 		}
-		return c, l.db.SetChapterCached(ch.ID, true)
+		return c, l.db.MarkChapterCached(ch.ID, row.Rule)
 	})
 	if err != nil {
 		return c, err
