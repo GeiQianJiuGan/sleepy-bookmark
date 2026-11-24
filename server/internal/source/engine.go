@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/html/charset"
 )
 
 const (
@@ -54,8 +56,24 @@ func (e *Engine) Search(ctx context.Context, src *Source, key string, page int) 
 	if page < 1 {
 		page = 1
 	}
-	fill := strings.NewReplacer("{{key}}", url.QueryEscape(key), "{{page}}", strconv.Itoa(page))
+	fill := strings.NewReplacer("{{key}}", url.QueryEscape(encodeKey(key, src.Charset)), "{{page}}", strconv.Itoa(page))
 	return e.list(ctx, src, src.Search, fill)
+}
+
+// encodeKey puts the search keyword into the charset the site is forced to: a GBK site reads
+// its query string and form as GBK too.
+func encodeKey(key, label string) string {
+	if label == "" {
+		return key
+	}
+	enc, _ := charset.Lookup(label)
+	if enc == nil {
+		return key
+	}
+	if out, err := enc.NewEncoder().String(key); err == nil {
+		return out
+	}
+	return key
 }
 
 // Recommend reads the source's recommendation list; a source without one has none.
