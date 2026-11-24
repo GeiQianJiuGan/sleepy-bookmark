@@ -70,7 +70,12 @@ interface Session {
   expiresIn: number
 }
 
-function saveSession(session: Session): string {
+// Counts logouts, so that a login or refresh still in flight when the user logs out is discarded.
+let epoch = 0
+
+/** Stores the session a request started in the given epoch came back with. */
+function saveSession(session: Session, started: number): string {
+  if (started !== epoch) throw new ApiError(401, '已退出登录')
   uni.setStorageSync(TOKEN_KEY, session.token)
   uni.setStorageSync(EXPIRES_KEY, Date.now() + session.expiresIn * 1000)
   uni.setStorageSync(REFRESH_KEY, session.refreshToken)
@@ -78,6 +83,7 @@ function saveSession(session: Session): string {
 }
 
 function clearSession() {
+  epoch++
   uni.removeStorageSync(TOKEN_KEY)
   uni.removeStorageSync(EXPIRES_KEY)
   uni.removeStorageSync(REFRESH_KEY)
@@ -116,19 +122,21 @@ export function refreshSession(): Promise<string> {
       toLogin()
       return Promise.reject(new ApiError(401, '请先登录'))
     }
+    const started = epoch
     pending = send<Session>('POST', '/auth/refresh', { refreshToken })
-      .then(saveSession)
+      .then((session) => saveSession(session, started))
       .catch((e) => {
         // Only a refusal ends the session; an unreachable server keeps it for the next try.
-        if (e instanceof ApiError && e.status === 401) {
+        if (e instanceof ApiError && e.status === 401 && started === epoch) {
           clearSession()
           toLogin()
         }
         throw e
       })
       .finally(() => {
-        pending = null
+        if (pending === mine) pending = null
       })
+    const mine = pending
   }
   return pending
 }
@@ -143,12 +151,15 @@ function accessToken(): Promise<string> {
 
 /** Logs in through wx.login. Only the login page calls this, after the user agreed to the privacy policy. */
 export async function login(): Promise<void> {
+  const started = epoch
   const code = await loginCode()
-  saveSession(await send<Session>('POST', '/auth/login', { code }))
+  saveSession(await send<Session>('POST', '/auth/login', { code }), started)
 }
 
 export function logout() {
   clearSession()
+  // A refresh still in flight belongs to the session that just ended.
+  pending = null
   toLogin()
 }
 

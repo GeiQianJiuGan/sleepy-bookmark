@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { onLaunch } from '@dcloudio/uni-app'
-import { hasSession, refreshSession, toLogin } from '@/api/http'
+import { hasSession, logout, refreshSession } from '@/api/http'
+import { privacyAgreed } from '@/utils/privacy'
 
 onLaunch(() => {
-  // A device that has logged in before renews its token; any other starts at the login page.
-  if (hasSession()) refreshSession().catch(() => {})
-  else toLogin()
+  // A device that has logged in before renews its token; any other starts at the login page,
+  // and so does one whose consent to the privacy policy is missing or for an older version.
+  if (hasSession() && privacyAgreed()) refreshSession().catch(() => {})
+  else logout()
 })
 </script>
 
