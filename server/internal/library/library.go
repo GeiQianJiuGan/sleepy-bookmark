@@ -66,7 +66,17 @@ func (l *Library) loadSource(id int64) (*source.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	return source.ParseSource([]byte(row.Rule))
+	return parseSource(row)
+}
+
+// parseSource reads the rule of a stored source. One that came with a subscribed list was
+// written by someone else, and is kept to public addresses.
+func parseSource(row *store.SourceRow) (*source.Source, error) {
+	src, err := source.ParseSource([]byte(row.Rule))
+	if src != nil {
+		src.Public = row.SubscriptionID != 0
+	}
+	return src, err
 }
 
 type SearchError struct {
@@ -156,7 +166,7 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 				results[i].err = errPaused
 				return
 			}
-			src, err := source.ParseSource([]byte(row.Rule))
+			src, err := parseSource(row)
 			if err == nil {
 				results[i].books, err = l.engine.Search(ctx, src, key, page)
 				l.health.note(row.ID, err)
@@ -342,7 +352,7 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 		if err != nil {
 			return nil, err
 		}
-		src, err := source.ParseSource([]byte(row.Rule))
+		src, err := parseSource(row)
 		if err != nil {
 			return nil, err
 		}

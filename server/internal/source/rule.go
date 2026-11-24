@@ -31,9 +31,12 @@ type Source struct {
 	BaseURL string            `json:"baseUrl"`
 	Headers map[string]string `json:"headers,omitempty"`
 	// Charset forces the page encoding (e.g. "gbk"); empty means auto-detect.
-	Charset     string     `json:"charset,omitempty"`
-	RateLimitMs int        `json:"rateLimitMs,omitempty"`
-	Search      SearchRule `json:"search"`
+	Charset     string `json:"charset,omitempty"`
+	RateLimitMs int    `json:"rateLimitMs,omitempty"`
+	// Public is set on a source of a subscribed list, which is read from public addresses only.
+	Public bool `json:"-"`
+
+	Search SearchRule `json:"search"`
 	// Recommend is an optional book list page (ranking, home page) shown before a search.
 	Recommend *ListRule   `json:"recommend,omitempty"`
 	Detail    DetailRule  `json:"detail"`
@@ -169,6 +172,7 @@ func (s *Source) IsAuto() bool {
 	plain := &Source{Name: s.Name, Type: s.Type, BaseURL: s.BaseURL}
 	plain.fillAuto()
 	own := *s
+	own.Public = false
 	if len(own.Headers) == 0 {
 		own.Headers = nil
 	}

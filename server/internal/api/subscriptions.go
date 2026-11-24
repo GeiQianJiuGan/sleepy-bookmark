@@ -6,13 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -21,35 +19,9 @@ import (
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
 
-// localLists lets a list be read from this machine or its network. It is only set by tests:
-// a list address comes from a user, and must not be a way to reach services behind the server.
-var localLists bool
-
-// publicOnly refuses connections to addresses that are not on the public internet. It runs on
-// every connection, so a redirect to such an address is refused as well. The client that uses
-// it takes no proxy from the environment: through one, the address checked would be the proxy's.
-func publicOnly(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip := net.ParseIP(host)
-	if localLists || ip != nil && !(ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()) {
-		return nil
-	}
-	return errors.New("subscription: " + host + " is not a public address")
-}
-
-var subscriptionClient = &http.Client{
-	Timeout: 20 * time.Second,
-	Transport: &http.Transport{
-		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, Control: publicOnly}).DialContext,
-		TLSHandshakeTimeout: 10 * time.Second,
-		MaxIdleConns:        4,
-		IdleConnTimeout:     time.Minute,
-	},
-}
+// subscriptionClient reads a list from the public internet only: its address comes from a user,
+// and must not be a way to reach services behind the server.
+var subscriptionClient = &http.Client{Timeout: 20 * time.Second, Transport: source.PublicTransport()}
 
 var (
 	reGitHubBlob = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/(?:blob|raw)/(.+)$`)

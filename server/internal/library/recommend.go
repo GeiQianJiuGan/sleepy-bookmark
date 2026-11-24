@@ -137,7 +137,7 @@ func (l *Library) recommend(ctx context.Context, row *store.SourceRow) []*store.
 	if !due {
 		return old
 	}
-	src, err := source.ParseSource([]byte(row.Rule))
+	src, err := parseSource(row)
 	if err != nil || src.Recommend == nil {
 		return nil
 	}

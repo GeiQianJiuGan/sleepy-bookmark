@@ -2,10 +2,12 @@ package source_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
@@ -439,5 +441,26 @@ func TestASourceWithSettingsOfItsOwnIsNotAuto(t *testing.T) {
 		if src.IsAuto() != auto {
 			t.Errorf("%s: IsAuto = %v, want %v", rule, src.IsAuto(), auto)
 		}
+	}
+}
+
+func TestASubscribedSourceIsOnlyReadFromThePublicInternet(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		fmt.Fprint(w, "<html><body>内网的页面</body></html>")
+	}))
+	defer srv.Close()
+	f := source.NewFetcher()
+	own := &source.Source{Name: "自己加的", Type: source.TypeNovel, BaseURL: srv.URL, RateLimitMs: 1}
+	if _, _, err := f.Page(context.Background(), own, "", srv.URL+"/", ""); err != nil || hits.Load() != 1 {
+		t.Fatalf("a source added by hand: %v after %d requests", err, hits.Load())
+	}
+	listed := *own
+	listed.Public = true
+	_, _, err := f.Page(context.Background(), &listed, "", srv.URL+"/", "")
+	var re source.RuleError
+	if !errors.As(err, &re) || !strings.Contains(string(re), "公网") || hits.Load() != 1 {
+		t.Fatalf("a source of a subscribed list: %v after %d requests, want it refused", err, hits.Load())
 	}
 }
