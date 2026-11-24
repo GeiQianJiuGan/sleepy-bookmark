@@ -281,7 +281,7 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 		if err := l.disk.SaveChapter(b.ID, ch.ID, c); err != nil {
 			return nil, err
 		}
-		return c, l.db.MarkChapterCached(ch.ID, row.Rule)
+		return c, l.db.MarkChapterCached(ch.ID, ch.URL, row.Rule)
 	})
 	if err != nil {
 		return c, err

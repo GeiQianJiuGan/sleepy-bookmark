@@ -204,12 +204,12 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 	return stale, tx.Commit()
 }
 
-// MarkChapterCached records that a chapter's content is on disk, unless the source rule it was
-// fetched with has been edited in the meantime (the edit already dropped the source's cache).
-func (d *DB) MarkChapterCached(id int64, rule string) error {
-	_, err := d.Exec(`UPDATE chapters SET cached = 1 WHERE id = ? AND EXISTS (
+// MarkChapterCached records that a chapter's content is on disk, unless what it was fetched
+// from is out of date by now: the chapter moved to another URL, or the source rule was edited.
+func (d *DB) MarkChapterCached(id int64, url, rule string) error {
+	_, err := d.Exec(`UPDATE chapters SET cached = 1 WHERE id = ? AND url = ? AND EXISTS (
 		SELECT 1 FROM books b JOIN sources s ON s.id = b.source_id
-		WHERE b.id = chapters.book_id AND s.rule = ?)`, id, rule)
+		WHERE b.id = chapters.book_id AND s.rule = ?)`, id, url, rule)
 	return err
 }
 

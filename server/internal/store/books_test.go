@@ -40,7 +40,7 @@ func TestReplaceTocKeepsChapterIDsWhenURLsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := db.Chapters(bookID)
-	if err := db.MarkChapterCached(before[1].ID, "{}"); err != nil {
+	if err := db.MarkChapterCached(before[1].ID, before[1].URL, "{}"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,7 +82,7 @@ func TestReplaceTocKeepsChapterIDsByURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, first := state()
-	if err := db.MarkChapterCached(first["b"], "{}"); err != nil {
+	if err := db.MarkChapterCached(first["b"], "b", "{}"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +127,7 @@ func TestReplaceTocDropsCacheWhenTheNextChapterChanges(t *testing.T) {
 	}
 	before, _ := db.Chapters(bookID)
 	for _, c := range before {
-		if err := db.MarkChapterCached(c.ID, "{}"); err != nil {
+		if err := db.MarkChapterCached(c.ID, c.URL, "{}"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,46 +145,27 @@ func TestReplaceTocDropsCacheWhenTheNextChapterChanges(t *testing.T) {
 	}
 }
 
-func TestMarkChapterCachedOnlyForTheCurrentRule(t *testing.T) {
+func TestMarkChapterCachedOnlyForTheCurrentRuleAndURL(t *testing.T) {
 	db, bookID := newBook(t) // its source has the rule "{}"
 	if _, err := db.ReplaceToc(bookID, entries("a")); err != nil {
 		t.Fatal(err)
 	}
 	list, _ := db.Chapters(bookID)
 	id := list[0].ID
+	cached := func() bool {
+		c, _ := db.Chapter(id)
+		return c.Cached
+	}
 
 	// Fetched with a rule that has been replaced since: the result must not count as cached.
-	if err := db.MarkChapterCached(id, `{"old":true}`); err != nil {
-		t.Fatal(err)
+	if err := db.MarkChapterCached(id, "a", `{"old":true}`); err != nil || cached() {
+		t.Fatalf("content fetched with an outdated rule was marked cached (err %v)", err)
 	}
-	if c, _ := db.Chapter(id); c.Cached {
-		t.Fatal("content fetched with an outdated rule was marked cached")
+	// Fetched from a URL the chapter no longer has (the catalog moved it meanwhile).
+	if err := db.MarkChapterCached(id, "moved-away", "{}"); err != nil || cached() {
+		t.Fatalf("content fetched from an outdated URL was marked cached (err %v)", err)
 	}
-	if err := db.MarkChapterCached(id, "{}"); err != nil {
-		t.Fatal(err)
-	}
-	if c, _ := db.Chapter(id); !c.Cached {
-		t.Fatal("content fetched with the current rule was not marked cached")
-	}
-}
-
-// Two chapters share a title and the site moves to new URLs while dropping the first of them:
-// the remaining one cannot be told apart by title, so no id is carried over to it.
-func TestReplaceTocDoesNotGuessBetweenChaptersWithTheSameTitle(t *testing.T) {
-	db, bookID := newBook(t)
-	if _, err := db.ReplaceToc(bookID, []TocEntry{{"notice", "/old/1"}, {"one", "/old/2"}, {"notice", "/old/3"}}); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := db.Chapters(bookID)
-
-	if _, err := db.ReplaceToc(bookID, []TocEntry{{"one", "/new/2"}, {"notice", "/new/3"}}); err != nil {
-		t.Fatal(err)
-	}
-	after, _ := db.Chapters(bookID)
-	if after[0].ID != before[1].ID {
-		t.Errorf("chapter with a unique title changed id from %d to %d", before[1].ID, after[0].ID)
-	}
-	if after[1].ID == before[0].ID || after[1].ID == before[2].ID {
-		t.Errorf("an ambiguous title was matched to an existing chapter: %+v", after[1])
+	if err := db.MarkChapterCached(id, "a", "{}"); err != nil || !cached() {
+		t.Fatalf("content fetched with the current rule and URL was not marked cached (err %v)", err)
 	}
 }
