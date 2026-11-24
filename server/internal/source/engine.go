@@ -171,6 +171,10 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 		if err != nil {
 			return c, err
 		}
+		// The link redirected to a page that was already read, or to the next chapter.
+		if base != u && seen[base] {
+			break
+		}
 		seen[base] = true
 		if src.Type == TypeComic {
 			page := doc.Values(src.Content.Images)

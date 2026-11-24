@@ -147,3 +147,39 @@ func TestComicPagesOverlapIsReadOnce(t *testing.T) {
 		t.Fatalf("images: %v, %v", c.Images, err)
 	}
 }
+
+func TestContentStopsAtARedirectToAPageItAlreadyRead(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/c/1", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><img src="/i/1.jpg"><img src="/i/2.jpg"><a id="next" href="/c/1_2">next</a></body></html>`))
+	})
+	mux.HandleFunc("/c/1_2", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><img src="/i/3.jpg"><a id="next" href="/c/1_3">next</a></body></html>`))
+	})
+	// The last page links to a page that does not exist, and the site sends that to the first one.
+	mux.HandleFunc("/c/1_3", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/c/1", http.StatusFound)
+	})
+	// The same for a link that the site sends to the next chapter.
+	mux.HandleFunc("/c/2", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><img src="/i/4.jpg"><a id="next" href="/c/2_2">next</a></body></html>`))
+	})
+	mux.HandleFunc("/c/2_2", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/c/3", http.StatusFound)
+	})
+	mux.HandleFunc("/c/3", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><img src="/i/5.jpg"></body></html>`))
+	})
+	e, src := site(t, mux)
+	src.Type = source.TypeComic
+	src.Content = source.ContentRule{Images: "css:img@src", NextPage: "css:#next@href"}
+
+	c, err := e.Content(context.Background(), src, src.BaseURL+"/c/1", src.BaseURL+"/c/2")
+	if err != nil || len(c.Images) != 3 {
+		t.Fatalf("images: %v, %v", c.Images, err)
+	}
+	c, err = e.Content(context.Background(), src, src.BaseURL+"/c/2", src.BaseURL+"/c/3")
+	if err != nil || len(c.Images) != 1 {
+		t.Fatalf("images before the next chapter: %v, %v", c.Images, err)
+	}
+}
