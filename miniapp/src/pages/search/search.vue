@@ -21,7 +21,12 @@ const sourceName = computed(() => sources.value.find((s) => s.id === sourceId.va
 // Before a search the page shows what each source recommends, in the order of the sources.
 const lists = ref<Record<number, Recommendation>>({})
 const homeLoading = ref(true)
-const groups = computed(() => sources.value.map((s) => lists.value[s.id]).filter((g) => g?.books.length))
+const groups = computed(() =>
+  sources.value
+    .filter((s) => s.rule.recommend)
+    .map((s) => lists.value[s.id])
+    .filter((g) => g?.books.length),
+)
 const shownGroups = computed(() =>
   sourceId.value ? groups.value.filter((g) => g.sourceId === sourceId.value) : groups.value,
 )
