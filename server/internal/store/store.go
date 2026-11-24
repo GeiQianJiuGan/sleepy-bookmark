@@ -291,7 +291,8 @@ func (d *DB) SourcesBySubscription(id int64) ([]*SourceRow, error) {
 	}
 	out := []*SourceRow{}
 	for _, r := range all {
-		if r.SubscriptionID == id {
+		// 0 is how a source of no subscription reads, and is not a subscription.
+		if id != 0 && r.SubscriptionID == id {
 			out = append(out, r)
 		}
 	}

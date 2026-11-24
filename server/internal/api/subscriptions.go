@@ -234,6 +234,9 @@ func (s *Server) deleteSubscription(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, err := s.db.Subscription(id); err != nil {
+		return err
+	}
 	if c.QueryParam("sources") == "1" {
 		rows, err := s.db.SourcesBySubscription(id)
 		if err != nil {

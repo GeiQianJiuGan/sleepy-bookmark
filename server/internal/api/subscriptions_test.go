@@ -201,3 +201,20 @@ func TestAListWithAByteOrderMarkIsRead(t *testing.T) {
 		t.Fatalf("code %d, result %+v", code, out)
 	}
 }
+
+func TestDeletingASubscriptionThatDoesNotExistDeletesNothing(t *testing.T) {
+	c := login(t)
+	if code := c.do("POST", "/api/sources", map[string]string{"name": "甲", "type": "novel", "baseUrl": "https://example.com"}, nil); code != 200 {
+		t.Fatalf("create: %d", code)
+	}
+	for _, id := range []string{"0", "99"} {
+		if code := c.do("DELETE", "/api/subscriptions/"+id+"?sources=1", nil, nil); code != 404 {
+			t.Errorf("delete subscription %s: %d, want 404", id, code)
+		}
+	}
+	var sources []sourceInfo
+	c.do("GET", "/api/sources", nil, &sources)
+	if len(sources) != 1 {
+		t.Fatalf("sources = %+v, want the one that was added", sources)
+	}
+}
