@@ -2,8 +2,10 @@
 package source
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 )
 
@@ -20,6 +22,7 @@ const (
 //	xpath://div[@id="x"]//a/@href
 //	json:data.list.#.name   gjson path, the default for JSON responses
 //	regex:var url = "(.*?)" first capture group of every match
+//	auto                    recognised from the page, see auto.go
 //
 // Field rules of a list are evaluated relative to each list item; an empty expr (e.g. "@href") is the item itself.
 type Source struct {
@@ -28,9 +31,12 @@ type Source struct {
 	BaseURL string            `json:"baseUrl"`
 	Headers map[string]string `json:"headers,omitempty"`
 	// Charset forces the page encoding (e.g. "gbk"); empty means auto-detect.
-	Charset     string     `json:"charset,omitempty"`
-	RateLimitMs int        `json:"rateLimitMs,omitempty"`
-	Search      SearchRule `json:"search"`
+	Charset     string `json:"charset,omitempty"`
+	RateLimitMs int    `json:"rateLimitMs,omitempty"`
+	// Public is set on a source of a subscribed list, which is read from public addresses only.
+	Public bool `json:"-"`
+
+	Search SearchRule `json:"search"`
 	// Recommend is an optional book list page (ranking, home page) shown before a search.
 	Recommend *ListRule   `json:"recommend,omitempty"`
 	Detail    DetailRule  `json:"detail"`
@@ -103,18 +109,75 @@ func (s *Source) Validate() error {
 		return errors.New("type 必须是 novel 或 comic")
 	case !strings.HasPrefix(s.BaseURL, "http://") && !strings.HasPrefix(s.BaseURL, "https://"):
 		return errors.New("baseUrl 必须以 http:// 或 https:// 开头")
-	case s.Search.URL == "" || s.Search.List == "" || s.Search.Title == "" || s.Search.URLRule == "":
-		return errors.New("search 需要 url / list / title / bookUrl")
-	case s.Recommend != nil && (s.Recommend.URL == "" || s.Recommend.List == "" || s.Recommend.Title == "" || s.Recommend.URLRule == ""):
-		return errors.New("recommend 需要 url / list / title / bookUrl")
-	case s.Toc.List == "" || s.Toc.URL == "":
-		return errors.New("toc 需要 list / url")
+	}
+	s.fillAuto()
+	switch {
+	case s.Search.List == "" || s.Recommend != nil && s.Recommend.List == "":
+		return errors.New("写了 title / bookUrl 的列表需要 list")
+	case s.Toc.List == "":
+		return errors.New("写了 name / url 的 toc 需要 list")
+	case !isAuto(s.Search.List) && (missing(s.Search.Title) || missing(s.Search.URLRule)):
+		return errors.New("search.list 不是 auto 时需要 title / bookUrl")
+	case s.Recommend != nil && !isAuto(s.Recommend.List) && (missing(s.Recommend.Title) || missing(s.Recommend.URLRule)):
+		return errors.New("recommend.list 不是 auto 时需要 title / bookUrl")
+	case !isAuto(s.Toc.List) && missing(s.Toc.URL):
+		return errors.New("toc.list 不是 auto 时需要 url")
 	case s.Toc.Fallback != nil && (s.Toc.Fallback.List == "" || s.Toc.Fallback.URL == ""):
 		return errors.New("toc.fallback 需要 list / url")
-	case s.Type == TypeNovel && s.Content.Body == "":
-		return errors.New("小说源需要 content.body")
-	case s.Type == TypeComic && s.Content.Images == "":
-		return errors.New("漫画源需要 content.images")
 	}
 	return nil
+}
+
+// missing reports whether a field that a hand-written list needs is left out.
+func missing(rule string) bool { return rule == "" || isAuto(rule) }
+
+// fillAuto leaves to recognition what a rule does not say. A source of nothing but a name, a
+// type and an address is recognised in full, with its details and its home page as the list of
+// recommendations; in any other, the parts that a source cannot do without are.
+func (s *Source) fillAuto() {
+	c := &s.Content
+	if s.Search == (ListRule{}) && s.Recommend == nil && s.Detail == (DetailRule{}) && s.Toc == (TocRule{}) &&
+		c.Body == "" && c.Images == "" && c.NextPage == "" && len(c.Purify) == 0 {
+		s.Recommend = &ListRule{}
+		s.Detail = DetailRule{Auto, Auto, Auto, Auto, Auto, Auto}
+	}
+	list := func(r *ListRule) {
+		if r.URL == "" || isAuto(r.URL) {
+			r.URL = Auto
+		}
+		if isAuto(r.List) || r.List == "" && missing(r.Title) && missing(r.URLRule) {
+			r.List, r.Title, r.URLRule = Auto, Auto, Auto
+		}
+	}
+	list(&s.Search)
+	if s.Recommend != nil {
+		list(s.Recommend)
+	}
+	// What is recognised is followed over its pages too, unless the rule says how.
+	if isAuto(s.Toc.List) || s.Toc.List == "" && missing(s.Toc.Name) && missing(s.Toc.URL) {
+		s.Toc.List, s.Toc.Name, s.Toc.URL = Auto, Auto, Auto
+		s.Toc.NextPage = cmp.Or(s.Toc.NextPage, Auto)
+	}
+	if s.Type == TypeNovel && (c.Body == "" || isAuto(c.Body)) {
+		c.Body, c.NextPage = Auto, cmp.Or(c.NextPage, Auto)
+	}
+	if s.Type == TypeComic && (c.Images == "" || isAuto(c.Images)) {
+		c.Images, c.NextPage = Auto, cmp.Or(c.NextPage, Auto)
+	}
+}
+
+// IsAuto reports whether a source is no more than a name, a type and an address, with all it
+// reads left to recognition. Headers, a charset or one rule make it a source written by hand.
+func (s *Source) IsAuto() bool {
+	plain := &Source{Name: s.Name, Type: s.Type, BaseURL: s.BaseURL}
+	plain.fillAuto()
+	own := *s
+	own.Public = false
+	if len(own.Headers) == 0 {
+		own.Headers = nil
+	}
+	if len(own.Content.Purify) == 0 {
+		own.Content.Purify = nil
+	}
+	return reflect.DeepEqual(&own, plain)
 }

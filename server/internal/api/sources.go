@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -18,6 +19,8 @@ import (
 type sourceView struct {
 	*store.SourceRow
 	Rule json.RawMessage `json:"rule"`
+	// Auto tells that the source has no rules of its own: its pages are recognised.
+	Auto bool `json:"auto"`
 	// Health is null while the source works.
 	Health *library.Health `json:"health"`
 }
@@ -29,24 +32,39 @@ func (s *Server) listSources(c echo.Context) error {
 	}
 	out := make([]sourceView, len(rows))
 	for i, r := range rows {
-		out[i] = sourceView{r, json.RawMessage(r.Rule), s.lib.Health(r.ID)}
+		out[i] = sourceView{r, json.RawMessage(r.Rule), false, s.lib.Health(r.ID)}
+		if rule, err := source.ParseSource([]byte(r.Rule)); err == nil {
+			out[i].Auto = rule.IsAuto()
+		}
 	}
 	return c.JSON(http.StatusOK, out)
 }
 
+// maxRules bounds a rule document, pasted or fetched.
+const maxRules = 2 << 20
+
+// splitRules takes a rule document apart: one rule object or an array of them.
+func splitRules(body []byte) ([]json.RawMessage, error) {
+	body = bytes.TrimSpace(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf")))
+	if len(body) == 0 || body[0] != '[' {
+		return []json.RawMessage{body}, nil
+	}
+	var raws []json.RawMessage
+	if err := json.Unmarshal(body, &raws); err != nil {
+		return nil, badRequest("JSON 格式错误：" + err.Error())
+	}
+	return raws, nil
+}
+
 // readRules accepts one rule object or an array of them.
 func readRules(c echo.Context) ([]*source.Source, error) {
-	body, err := io.ReadAll(io.LimitReader(c.Request().Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxRules))
 	if err != nil {
 		return nil, err
 	}
-	var raws []json.RawMessage
-	if body = bytes.TrimSpace(body); len(body) > 0 && body[0] == '[' {
-		if err := json.Unmarshal(body, &raws); err != nil {
-			return nil, badRequest("JSON 格式错误：" + err.Error())
-		}
-	} else {
-		raws = []json.RawMessage{body}
+	raws, err := splitRules(body)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]*source.Source, 0, len(raws))
 	for _, raw := range raws {
@@ -59,6 +77,8 @@ func readRules(c echo.Context) ([]*source.Source, error) {
 	return out, nil
 }
 
+func nameKey(typ, name string) string { return typ + "\x00" + name }
+
 // createSources imports rules. A rule named like exactly one existing source of the same type
 // replaces that source's rule, so that re-importing a newer list keeps the shelf and the history.
 func (s *Server) createSources(c echo.Context) error {
@@ -66,41 +86,63 @@ func (s *Server) createSources(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	existing, err := s.db.Sources("", false)
-	if err != nil {
-		return err
-	}
-	byName := map[string][]*store.SourceRow{}
-	for _, row := range existing {
-		byName[row.Type+"\x00"+row.Name] = append(byName[row.Type+"\x00"+row.Name], row)
-	}
 	// Two sources of one name could never be updated by a later import.
 	seen := map[string]bool{}
 	for _, src := range rules {
-		if seen[src.Type+"\x00"+src.Name] {
+		if seen[nameKey(src.Type, src.Name)] {
 			return badRequest("导入的列表里有重名的书源：" + src.Name)
 		}
-		seen[src.Type+"\x00"+src.Name] = true
+		seen[nameKey(src.Type, src.Name)] = true
 	}
-	ids := make([]int64, 0, len(rules))
-	updated := 0
+	ids, updated, err := s.importRules(rules, 0)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, echo.Map{"ids": ids, "updated": updated})
+}
+
+// importRules stores rules whose names differ from each other, as sources of the subscription
+// if one is given, and tells how many of them replaced the rule of an existing source.
+func (s *Server) importRules(rules []*source.Source, subscription int64) (ids []int64, updated int, err error) {
+	existing, err := s.db.Sources("", false)
+	if err != nil {
+		return nil, 0, err
+	}
+	byName := map[string][]*store.SourceRow{}
+	for _, row := range existing {
+		byName[nameKey(row.Type, row.Name)] = append(byName[nameKey(row.Type, row.Name)], row)
+	}
+	ids = make([]int64, 0, len(rules))
 	for _, src := range rules {
-		if same := byName[src.Type+"\x00"+src.Name]; len(same) == 1 {
-			if err := s.replaceRule(same[0], src); err != nil {
-				return err
-			}
-			ids = append(ids, same[0].ID)
-			updated++
-			continue
+		var id int64
+		same := byName[nameKey(src.Type, src.Name)]
+		// Of several sources of the name, the one this list brought earlier is the one it
+		// updates; without that, every sync would add one more.
+		if mine := slices.IndexFunc(same, func(r *store.SourceRow) bool { return r.SubscriptionID == subscription }); subscription != 0 && mine >= 0 {
+			same = same[mine : mine+1]
 		}
-		raw, _ := json.Marshal(src)
-		id, err := s.db.CreateSource(src.Name, src.Type, string(raw))
-		if err != nil {
-			return err
+		if len(same) == 1 {
+			id = same[0].ID
+			// The source is the list's before it has the list's rule, not after: a rule that
+			// someone else wrote is never read as one written here.
+			if subscription != 0 {
+				if err := s.db.SetSourceSubscription(id, subscription); err != nil {
+					return ids, updated, err
+				}
+			}
+			if err := s.replaceRule(same[0], src); err != nil {
+				return ids, updated, err
+			}
+			updated++
+		} else {
+			raw, _ := json.Marshal(src)
+			if id, err = s.db.CreateSource(src.Name, src.Type, string(raw), subscription); err != nil {
+				return ids, updated, err
+			}
 		}
 		ids = append(ids, id)
 	}
-	return c.JSON(http.StatusOK, echo.Map{"ids": ids, "updated": updated})
+	return ids, updated, nil
 }
 
 func (s *Server) updateSource(c echo.Context) error {
@@ -190,6 +232,13 @@ func (s *Server) deleteSource(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.removeSource(id); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) removeSource(id int64) error {
 	bookIDs, err := s.db.BookIDsBySource(id)
 	if err != nil {
 		return err
@@ -202,7 +251,7 @@ func (s *Server) deleteSource(c echo.Context) error {
 	}
 	// The saved pages of its comics are of no use any more.
 	s.lib.ReleaseKept()
-	return c.NoContent(http.StatusNoContent)
+	return nil
 }
 
 func (s *Server) testSource(c echo.Context) error {
@@ -213,9 +262,33 @@ func (s *Server) testSource(c echo.Context) error {
 	if len(rules) != 1 {
 		return badRequest("一次只能测试一个书源")
 	}
+	// Without a keyword, the book to try is taken from the source's list of recommendations.
 	key := c.QueryParam("q")
-	if key == "" {
+	if key == "" && rules[0].Recommend == nil {
 		return badRequest("缺少搜索关键词 q")
+	}
+	// A rule tried out for a source of a subscribed list is read as that source is.
+	if id := c.QueryParam("id"); id != "" {
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return badRequest("无效的 id")
+		}
+		row, err := s.db.Source(n)
+		if err != nil {
+			return err
+		}
+		rules[0].Public = row.Listed
+	} else {
+		// Saved as a new source, it would be written over the one source of its name, and read
+		// as that one is.
+		existing, err := s.db.Sources("", false)
+		if err != nil {
+			return err
+		}
+		same := slices.DeleteFunc(existing, func(r *store.SourceRow) bool {
+			return nameKey(r.Type, r.Name) != nameKey(rules[0].Type, rules[0].Name)
+		})
+		rules[0].Public = len(same) == 1 && same[0].Listed
 	}
 	return c.JSON(http.StatusOK, s.lib.TestSource(c.Request().Context(), rules[0], key))
 }

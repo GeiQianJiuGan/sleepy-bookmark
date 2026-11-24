@@ -21,7 +21,7 @@ func newBook(t *testing.T) (*DB, int64) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	srcID, err := db.CreateSource("s", "novel", "{}")
+	srcID, err := db.CreateSource("s", "novel", "{}", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

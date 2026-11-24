@@ -42,6 +42,8 @@ type page struct {
 // (detail and toc are often the same URL).
 type Fetcher struct {
 	client *http.Client
+	// public is the client for sources of subscribed lists.
+	public *http.Client
 
 	mu    sync.Mutex
 	next  map[string]time.Time
@@ -53,6 +55,7 @@ func NewFetcher() *Fetcher {
 	jar, _ := cookiejar.New(nil)
 	return &Fetcher{
 		client: &http.Client{Timeout: 20 * time.Second, Jar: jar},
+		public: &http.Client{Timeout: 20 * time.Second, Jar: jar, Transport: PublicTransport()},
 		next:   map[string]time.Time{},
 		pages:  map[string]page{},
 	}
@@ -124,8 +127,15 @@ func (f *Fetcher) once(ctx context.Context, src *Source, method, url, body, acce
 	for k, v := range src.Headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := f.client.Do(req)
+	client := f.client
+	if src.Public {
+		client = f.public
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		if strings.Contains(err.Error(), errNotPublic.Error()) {
+			return nil, "", "", RuleError("订阅来的书源只能访问公网地址，这个地址指向服务器本机或内网")
+		}
 		return nil, "", "", transportError(err)
 	}
 	defer resp.Body.Close()
@@ -152,7 +162,7 @@ func isChallenge(body []byte) bool {
 func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body string) ([]byte, string, error) {
 	// The charset and headers are part of the key: they change what the same URL returns,
 	// and they are what gets edited between two runs of a source test.
-	key := fmt.Sprintf("%s %s %s %s %v", method, url, body, src.Charset, src.Headers)
+	key := fmt.Sprintf("%s %s %s %s %v %v", method, url, body, src.Charset, src.Headers, src.Public)
 	f.mu.Lock()
 	p, ok := f.pages[key]
 	f.mu.Unlock()

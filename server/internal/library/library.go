@@ -66,7 +66,17 @@ func (l *Library) loadSource(id int64) (*source.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	return source.ParseSource([]byte(row.Rule))
+	return parseSource(row)
+}
+
+// parseSource reads the rule of a stored source. One that came with a subscribed list was
+// written by someone else, and is kept to public addresses, subscribed to still or not.
+func parseSource(row *store.SourceRow) (*source.Source, error) {
+	src, err := source.ParseSource([]byte(row.Rule))
+	if src != nil {
+		src.Public = row.Listed
+	}
+	return src, err
 }
 
 type SearchError struct {
@@ -156,7 +166,7 @@ func (l *Library) search(ctx context.Context, typ, key string, page int, want fu
 				results[i].err = errPaused
 				return
 			}
-			src, err := source.ParseSource([]byte(row.Rule))
+			src, err := parseSource(row)
 			if err == nil {
 				results[i].books, err = l.engine.Search(ctx, src, key, page)
 				l.health.note(row.ID, err)
@@ -342,7 +352,7 @@ func (l *Library) content(ctx context.Context, b *store.Book, ch, next *store.Ch
 		if err != nil {
 			return nil, err
 		}
-		src, err := source.ParseSource([]byte(row.Rule))
+		src, err := parseSource(row)
 		if err != nil {
 			return nil, err
 		}
@@ -455,6 +465,7 @@ func (l *Library) fetchImage(ctx context.Context, sourceID int64, url string, ke
 }
 
 // TestSource runs search, toc and the first chapter of a rule without touching the database.
+// Without a keyword it takes the book to try from the rule's list of recommendations.
 func (l *Library) TestSource(ctx context.Context, src *source.Source, key string) map[string]any {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
@@ -463,12 +474,29 @@ func (l *Library) TestSource(ctx context.Context, src *source.Source, key string
 		report["failedStep"], report["error"] = step, err.Error()
 		return report
 	}
-	books, err := l.engine.Search(ctx, src, key, 1)
-	if err == nil && len(books) == 0 {
-		err = fmt.Errorf("搜索 %q 没有结果", key)
-	}
-	if err != nil {
-		return fail("search", err)
+	var books []source.BookInfo
+	if key != "" {
+		found, err := l.engine.Search(ctx, src, key, 1)
+		if err == nil && len(found) == 0 {
+			err = fmt.Errorf("搜索 %q 没有结果", key)
+		}
+		if err != nil {
+			return fail("search", err)
+		}
+		books = found
+	} else {
+		// A source that cannot be searched is of no use, whatever else works.
+		searchURL, err := l.engine.SearchURL(ctx, src)
+		if err != nil {
+			return fail("search", err)
+		}
+		report["searchUrl"] = searchURL
+		if books, err = l.engine.Recommend(ctx, src); err == nil && len(books) == 0 {
+			err = errors.New("没有在首页识别到书籍列表，请填一个搜索关键词再试")
+		}
+		if err != nil {
+			return fail("recommend", err)
+		}
 	}
 	report["searchCount"], report["book"] = len(books), books[0]
 	detail, err := l.engine.Detail(ctx, src, books[0].URL)
@@ -502,7 +530,7 @@ func (l *Library) SeedSource(src source.Source) error {
 		return nil
 	}
 	raw, _ := json.Marshal(src)
-	_, err := l.db.CreateSource(src.Name, src.Type, string(raw))
+	_, err := l.db.CreateSource(src.Name, src.Type, string(raw), 0)
 	return err
 }
 

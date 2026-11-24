@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -24,10 +25,13 @@ type Server struct {
 	auth *auth.Auth
 	lib  *library.Library
 	disk *cache.Disk
+	// lists is held while a subscribed list is imported or a subscription is deleted, so that
+	// a sync that was still fetching does not import into a subscription deleted meanwhile.
+	lists sync.Mutex
 }
 
 func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *echo.Echo {
-	s := &Server{db, a, lib, disk}
+	s := &Server{db: db, auth: a, lib: lib, disk: disk}
 	e := echo.New()
 	e.HideBanner, e.HidePort = true, true
 	e.HTTPErrorHandler = errorHandler
@@ -46,6 +50,10 @@ func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *ec
 	g.PUT("/sources/:id", s.updateSource)
 	g.PUT("/sources/:id/enabled", s.toggleSource)
 	g.DELETE("/sources/:id", s.deleteSource)
+	g.GET("/subscriptions", s.listSubscriptions)
+	g.POST("/subscriptions", s.createSubscription)
+	g.POST("/subscriptions/:id/sync", s.syncSubscription)
+	g.DELETE("/subscriptions/:id", s.deleteSubscription)
 
 	g.GET("/search", s.search)
 	g.GET("/recommend", s.recommend)

@@ -68,6 +68,7 @@ func (c *client) do(method, path string, body any, out any) int {
 
 func TestMain(m *testing.M) {
 	source.RetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	api.SetLocalLists(true)
 	os.Exit(m.Run())
 }
 
@@ -696,7 +697,7 @@ func TestRecommendListsTopTenPerSource(t *testing.T) {
 
 	bad := c.sources("?type=novel")[0].Rule
 	bad["name"] = "bad"
-	bad["recommend"] = map[string]any{"url": "/rank"}
+	bad["recommend"] = map[string]any{"url": "/rank", "list": "css:.result li"}
 	if code := c.do("POST", "/api/sources", bad, nil); code != http.StatusBadRequest {
 		t.Fatalf("incomplete recommend rule: %d", code)
 	}

@@ -99,7 +99,11 @@ docker compose up -d --build
 
 - 登录：启动时本机有 refresh token 就换新 token，没有或已失效就进登录页；登录页先弹《用户协议与隐私政策》，同意后才调用微信登录；「我的」里可以退出登录、查看政策和撤回同意
 - 左上角的图标在小说 / 漫画之间整体切换，书架、搜索、历史都按当前模式过滤
-- 书源管理：新增、批量导入、编辑、启停、删除、在线测试
+- 书源管理（格式见 [docs/source-rule.md](docs/source-rule.md)）：
+  - 简单模式：只填名称和网站地址，搜索、详情、目录、正文由后端按页面结构自动识别
+  - 高级模式：导入 JSON 规则（单个或数组），用于自动识别不了的网站
+  - 订阅：填一个书源列表（JSON 文件）的网址导入，可再次同步；支持 GitHub 文件地址
+  - 编辑、启停、删除、在线测试
 - 多书源并发搜索，可以只搜某一个书源；搜索框右侧的按钮展开高级选项，可选模糊（默认，按书名相关度排序）或精确（书名完全一致）
 - 搜索页没有输入关键词时是两列瀑布流，向下滑动继续加载，分「推荐」和「排行」两个视图（书源规则里配了 `recommend` 才有）
   - 排行：选一个书源，按站点榜单的顺序看
@@ -130,6 +134,7 @@ docker compose up -d --build
 | `GET/POST /api/sources`，`PUT/DELETE /api/sources/:id` | 书源管理 |
 | `PUT /api/sources/:id/enabled` | 启停 |
 | `POST /api/sources/test` | 不保存，直接测试一条规则 |
+| `GET/POST /api/subscriptions`，`POST /api/subscriptions/:id/sync`，`DELETE /api/subscriptions/:id` | 书源列表订阅：添加、同步、取消（`?sources=1` 连同书源一起删） |
 | `GET /api/search?type=&q=&page=&source=&match=` | 搜索。`source` 是书源 id，不传搜全部；`match=exact` 只留书名完全一致的 |
 | `GET /api/rank?source=&offset=&limit=` | 一个书源的榜单，分页（每页默认 20、最多 50 本），返回 `total` 和 `books` |
 | `GET /api/feed?type=&offset=&limit=` | 跨书源去重的推荐，分页；每本带 `sources`（上榜的书源数）和 `reason` |
