@@ -3,7 +3,9 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,6 +119,9 @@ const maxRule = 1 << 20
 // list costs in memory, and whoever publishes it decides how many there are.
 const maxListRules = 50000
 
+// maxUnpacked is how much a packed list may unpack to.
+const maxUnpacked = 256 << 20
+
 var (
 	errNotRules = errors.New("not a rule list")
 	errRuleSize = errors.New("rule too large")
@@ -143,6 +148,10 @@ func (m *metered) Read(p []byte) (int, error) {
 // streamRules reads a rule document of any size from r: one rule object, an array of rules, or
 // an object with a "sources" array. The rules are parsed as they arrive.
 func streamRules(r io.Reader) ([]*source.Source, []skipped, error) {
+	return streamRulesFrom(r, false)
+}
+
+func streamRulesFrom(r io.Reader, packed bool) ([]*source.Source, []skipped, error) {
 	br := bufio.NewReader(r)
 	if bom, _ := br.Peek(3); string(bom) == "\xef\xbb\xbf" {
 		br.Discard(3)
@@ -156,6 +165,18 @@ func streamRules(r io.Reader) ([]*source.Source, []skipped, error) {
 			continue
 		}
 		br.UnreadByte()
+		if c == 'e' && !packed {
+			// Some apps share a list packed: its JSON deflated, then written as base64, which
+			// then begins with an e. It is unpacked as it is read, and bounded like any list.
+			z, err := zlib.NewReader(base64.NewDecoder(base64.StdEncoding, br))
+			if err != nil {
+				return nil, nil, errNotRules
+			}
+			defer z.Close()
+			// What is unpacked is bounded as a whole: a small download must not turn into
+			// endless reading. A list longer than this is cut short and refused as such.
+			return streamRulesFrom(io.LimitReader(z, maxUnpacked), true)
+		}
 		if c != '[' && c != '{' {
 			return nil, nil, errNotRules
 		}
