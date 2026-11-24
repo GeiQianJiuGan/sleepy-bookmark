@@ -182,6 +182,12 @@ func (s *Server) sync(c echo.Context, sub *store.Subscription) error {
 // applySubscription imports a fetched list. Sources that the list no longer names are kept:
 // removing them would remove their books from shelves and histories.
 func (s *Server) applySubscription(c echo.Context, id int64, rules []*source.Source, left []skipped) error {
+	s.lists.Lock()
+	defer s.lists.Unlock()
+	// The list took a while to fetch, and the subscription may have been deleted since.
+	if _, err := s.db.Subscription(id); err != nil {
+		return err
+	}
 	ids, updated, err := s.importRules(rules, id)
 	if err != nil {
 		return err
@@ -206,6 +212,8 @@ func (s *Server) deleteSubscription(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	s.lists.Lock()
+	defer s.lists.Unlock()
 	if _, err := s.db.Subscription(id); err != nil {
 		return err
 	}
