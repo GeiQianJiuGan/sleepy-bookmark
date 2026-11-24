@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -23,7 +24,7 @@ import (
 
 // subscriptionClient reads a list from the public internet only: its address comes from a user,
 // and must not be a way to reach services behind the server.
-var subscriptionClient = &http.Client{Timeout: 20 * time.Second, Transport: source.PublicTransport()}
+var subscriptionClient = &http.Client{Timeout: 2 * time.Minute, Transport: source.PublicTransport()}
 
 var (
 	reGitHubBlob = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/(?:blob|raw)/(.+)$`)
@@ -55,39 +56,204 @@ type skipped struct {
 	Error string `json:"error"`
 }
 
-func parseRuleList(raws []json.RawMessage) ([]*source.Source, []skipped) {
-	var rules []*source.Source
-	var left []skipped
-	seen := map[string]bool{}
-	for i, raw := range raws {
-		src, err := source.ParseSourceFlexible(raw)
-		name := fmt.Sprintf("第 %d 个", i+1)
-		if src != nil && src.Name != "" {
-			name = src.Name
-		} else {
-			var probe struct {
-				Name           string `json:"name"`
-				BookSourceName string `json:"bookSourceName"`
-			}
-			if json.Unmarshal(raw, &probe) == nil {
-				if probe.Name != "" {
-					name = probe.Name
-				} else if probe.BookSourceName != "" {
-					name = probe.BookSourceName
-				}
-			}
+// ruleList collects the rules of a list one at a time, so that a list of any size costs the
+// memory of the rules it keeps and not of the document they came in.
+type ruleList struct {
+	rules []*source.Source
+	left  []skipped
+	seen  map[string]bool
+	n     int
+}
+
+func (l *ruleList) add(raw json.RawMessage) {
+	l.n++
+	name := fmt.Sprintf("第 %d 个", l.n)
+	if len(raw) > maxRule {
+		l.left = append(l.left, skipped{name, "单个书源超过 1 MB"})
+		return
+	}
+	src, err := source.ParseSourceFlexible(raw)
+	if src != nil && src.Name != "" {
+		name = src.Name
+	} else {
+		var probe struct {
+			Name           string `json:"name"`
+			BookSourceName string `json:"bookSourceName"`
 		}
-		switch {
-		case err != nil:
-			left = append(left, skipped{name, err.Error()})
-		case seen[nameKey(src.Type, src.Name)]:
-			left = append(left, skipped{name, "列表里有重名的书源"})
-		default:
-			seen[nameKey(src.Type, src.Name)] = true
-			rules = append(rules, src)
+		if json.Unmarshal(raw, &probe) == nil {
+			if probe.Name != "" {
+				name = probe.Name
+			} else if probe.BookSourceName != "" {
+				name = probe.BookSourceName
+			}
 		}
 	}
-	return rules, left
+	if l.seen == nil {
+		l.seen = map[string]bool{}
+	}
+	switch {
+	case err != nil:
+		l.left = append(l.left, skipped{name, err.Error()})
+	case l.seen[nameKey(src.Type, src.Name)]:
+		l.left = append(l.left, skipped{name, "列表里有重名的书源"})
+	default:
+		l.seen[nameKey(src.Type, src.Name)] = true
+		l.rules = append(l.rules, src)
+	}
+}
+
+func parseRuleList(raws []json.RawMessage) ([]*source.Source, []skipped) {
+	var l ruleList
+	for _, raw := range raws {
+		l.add(raw)
+	}
+	return l.rules, l.left
+}
+
+// maxRule bounds one rule of a streamed list; the list itself may be of any size.
+const maxRule = 1 << 20
+
+var (
+	errNotRules = errors.New("not a rule list")
+	errRuleSize = errors.New("rule too large")
+)
+
+// metered fails a read once more than left bytes were read since it was last reset: the decoder
+// buffers a whole value, and one value must not be a way to make it buffer without end.
+type metered struct {
+	r    io.Reader
+	left int
+}
+
+func (m *metered) Read(p []byte) (int, error) {
+	if m.left <= 0 {
+		return 0, errRuleSize
+	}
+	n, err := m.r.Read(p[:min(len(p), m.left)])
+	m.left -= n
+	return n, err
+}
+
+// streamRules reads a rule document of any size from r: one rule object, an array of rules, or
+// an object with a "sources" array. The rules are parsed as they arrive.
+func streamRules(r io.Reader) ([]*source.Source, []skipped, error) {
+	br := bufio.NewReader(r)
+	if bom, _ := br.Peek(3); string(bom) == "\xef\xbb\xbf" {
+		br.Discard(3)
+	}
+	for {
+		c, err := br.ReadByte()
+		if err != nil {
+			return nil, nil, errNotRules
+		}
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			continue
+		}
+		br.UnreadByte()
+		if c != '[' && c != '{' {
+			return nil, nil, errNotRules
+		}
+		break
+	}
+	// A value that is read whole has room for its own size and what the decoder reads ahead.
+	m := &metered{r: br, left: 4 * maxRule}
+	dec := json.NewDecoder(m)
+	var list ruleList
+	// more gives every value the room anew, whatever the one before it used.
+	more := func() bool {
+		m.left = 4 * maxRule
+		ok := dec.More()
+		m.left = 4 * maxRule
+		return ok
+	}
+	elements := func() error {
+		for more() {
+			var raw json.RawMessage
+			if err := dec.Decode(&raw); err != nil {
+				return err
+			}
+			list.add(raw)
+		}
+		_, err := dec.Token()
+		return err
+	}
+	open, err := dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	if open == json.Delim('[') {
+		if err := elements(); err != nil {
+			return nil, nil, err
+		}
+		return list.rules, list.left, nil
+	}
+	// An object is a bundle when it has a "sources" array, and one rule otherwise. Which it is
+	// shows only at that key, so the other fields are kept until then, up to the size of a rule.
+	var fields bytes.Buffer
+	bundle := false
+	for more() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, nil, err
+		}
+		name, _ := key.(string)
+		if name == "sources" && !bundle {
+			// The token after the key tells an array from anything else, and opens it.
+			val, err := dec.Token()
+			if err != nil {
+				return nil, nil, err
+			}
+			switch val {
+			case json.Delim('['):
+				bundle = true
+				fields = bytes.Buffer{}
+				if err := elements(); err != nil {
+					return nil, nil, err
+				}
+			case json.Delim('{'):
+				// No rule has an object there; it is read past.
+				for depth := 1; depth > 0; {
+					m.left = 4 * maxRule
+					t, err := dec.Token()
+					if err != nil {
+						return nil, nil, err
+					}
+					if d, ok := t.(json.Delim); ok && (d == '{' || d == '[') {
+						depth++
+					} else if ok {
+						depth--
+					}
+				}
+			}
+			continue
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, nil, err
+		}
+		if bundle {
+			continue
+		}
+		if fields.Len()+len(raw) > maxRule {
+			return nil, nil, errRuleSize
+		}
+		if fields.Len() > 0 {
+			fields.WriteByte(',')
+		}
+		k, _ := json.Marshal(name)
+		fields.Write(k)
+		fields.WriteByte(':')
+		fields.Write(raw)
+	}
+	if !bundle {
+		list.add(json.RawMessage("{" + fields.String() + "}"))
+	}
+	return list.rules, list.left, nil
+}
+
+func isSyntax(err error) bool {
+	var syn *json.SyntaxError
+	return errors.As(err, &syn)
 }
 
 // fetchRules downloads a subscribed list. Rules that are not valid are left out and reported:
@@ -106,21 +272,17 @@ func fetchRules(ctx context.Context, u string) ([]*source.Source, []skipped, err
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, badRequest(fmt.Sprintf("订阅地址返回了 %d，请检查地址（私有仓库的文件读不到）", resp.StatusCode))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRules+1))
-	if err != nil {
+	rules, left, err := streamRules(resp.Body)
+	switch {
+	case errors.Is(err, errNotRules):
+		return nil, nil, badRequest("订阅地址返回的不是书源列表（JSON）。GitHub 上的文件请用它的 Raw 地址")
+	case errors.Is(err, errRuleSize):
+		return nil, nil, badRequest("订阅里有一个书源超过 1 MB，无法读取")
+	case isSyntax(err):
+		return nil, nil, badRequest("JSON 格式错误：" + err.Error())
+	case err != nil:
 		return nil, nil, badRequest("订阅内容没有读完，请稍后再试")
 	}
-	if len(body) > maxRules {
-		return nil, nil, badRequest("订阅内容超过 2 MB")
-	}
-	if trimmed := bytes.TrimSpace(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))); len(trimmed) == 0 || trimmed[0] != '[' && trimmed[0] != '{' {
-		return nil, nil, badRequest("订阅地址返回的不是书源列表（JSON）。GitHub 上的文件请用它的 Raw 地址")
-	}
-	raws, err := splitRules(body)
-	if err != nil {
-		return nil, nil, err
-	}
-	rules, left := parseRuleList(raws)
 	if len(rules) == 0 {
 		msg := "订阅里没有可用的书源"
 		if len(left) > 0 {
@@ -329,32 +491,24 @@ func (s *Server) syncAllSubscriptions(c echo.Context) error {
 // subscription list directly from this server via SOURCES_FEED_FILE.
 func ServeSourcesFeed(e *echo.Echo, filePath string) {
 	e.GET("/api/sources/feed.json", func(c echo.Context) error {
-		data, err := os.ReadFile(filePath)
+		f, err := os.Open(filePath)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusNotFound, "书源订阅文件不可用")
 		}
-		if len(data) > maxRules {
-			return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "订阅文件超过 2 MB")
-		}
+		defer f.Close()
 		c.Response().Header().Set("Cache-Control", "public, max-age=300")
-		return c.Blob(http.StatusOK, "application/json; charset=utf-8", data)
+		return c.Stream(http.StatusOK, "application/json; charset=utf-8", f)
 	})
 }
 
 // LoadRulesFile reads a local JSON source rule file (single object, array, or {sources:[...]})
 // and returns all valid rules along with the number of skipped entries.
 func LoadRulesFile(filePath string) ([]*source.Source, int, error) {
-	data, err := os.ReadFile(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(data) > maxRules {
-		return nil, 0, errors.New("书源文件超过 2 MB")
-	}
-	raws, err := splitRules(data)
-	if err != nil {
-		return nil, 0, err
-	}
-	rules, left := parseRuleList(raws)
-	return rules, len(left), nil
+	defer f.Close()
+	rules, left, err := streamRules(f)
+	return rules, len(left), err
 }

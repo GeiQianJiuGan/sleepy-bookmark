@@ -81,6 +81,7 @@ func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]R
 		return nil, err
 	}
 	lists := make([][]*store.Book, len(rows))
+	visits := make(chan struct{}, maxVisits)
 	var wg sync.WaitGroup
 	for i, row := range rows {
 		if sourceID != 0 && row.ID != sourceID {
@@ -89,6 +90,8 @@ func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]R
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			visits <- struct{}{}
+			defer func() { <-visits }()
 			lists[i] = l.recommend(ctx, row)
 		}()
 	}
