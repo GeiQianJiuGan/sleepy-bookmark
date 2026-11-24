@@ -10,7 +10,7 @@
     { "path": "pages/search/search", "style": { "navigationBarTitleText": "搜索", "navigationStyle": "custom" } },
     { "path": "pages/mine/mine", "style": { "navigationBarTitleText": "我的", "navigationStyle": "custom" } },
     { "path": "pages/book/detail", "style": { "navigationBarTitleText": "详情" } },
-    { "path": "pages/reader/reader", "style": { "navigationBarTitleText": "阅读" } },
+    { "path": "pages/reader/reader", "style": { "navigationBarTitleText": "阅读", "navigationStyle": "custom" } },
     { "path": "pages/history/history", "style": { "navigationBarTitleText": "浏览历史", "navigationStyle": "custom", "enablePullDownRefresh": true } },
     { "path": "pages/sources/list", "style": { "navigationBarTitleText": "书源管理" } },
     { "path": "pages/sources/edit", "style": { "navigationBarTitleText": "编辑书源" } },

@@ -94,6 +94,7 @@ async function saveChapter(entry: OfflineBook, ch: Chapter) {
       local.push(path)
     }
     content.images = local
+    delete content.origins
   }
   const path = chapterFile(bookId, ch.id)
   fs.writeFileSync(path, JSON.stringify(content), 'utf8')

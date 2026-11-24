@@ -38,6 +38,8 @@ export interface ChapterContent extends Chapter {
   text?: string
   /** Comic pages: server-relative proxy URLs, or local file paths for offline chapters. */
   images?: string[]
+  /** The same pages at the source site, for loading them without the server in between. */
+  origins?: string[]
   prevId: number
   nextId: number
 }
