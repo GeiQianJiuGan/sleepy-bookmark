@@ -1,4 +1,4 @@
-import { API_BASE } from '@/config'
+import { API_BASE, REQUEST_TIMEOUT } from '@/config'
 
 const TOKEN_KEY = 'token'
 
@@ -27,7 +27,7 @@ function send<T>(method: Method, path: string, data?: unknown, token?: string): 
       method,
       data: data as any,
       header: token ? { Authorization: 'Bearer ' + token } : {},
-      timeout: 70000,
+      timeout: REQUEST_TIMEOUT,
       success: (res) => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(res.data as T)

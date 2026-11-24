@@ -10,3 +10,4 @@ dist/
 data/
 /server/server
 deploy/.env
+app.config.json

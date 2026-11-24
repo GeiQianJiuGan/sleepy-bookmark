@@ -32,8 +32,8 @@ npm run dev:h5          # 或者在浏览器里调试
 ```
 
 - `DEMO_SOURCE=true` 会在后端挂一个假的小说站和漫画站，并自动添加两个书源，搜索「演示」即可走通全流程。
-- 微信开发者工具里需要勾选「不校验合法域名」，并在 `miniapp/src/manifest.json` 的 `mp-weixin.appid` 填入自己的 AppID。
-- 后端地址在 `miniapp/.env.development` / `miniapp/.env.production` 的 `VITE_API_BASE`。
+- 微信开发者工具里需要勾选「不校验合法域名」。复制根目录 `app.config.example.json` 为 `app.config.json`（已被 `.gitignore` 忽略），填入 `serverUrl` 和 `appId`；构建/开发时会自动注入后端地址与小程序 AppID。
+- 如需按环境覆盖后端地址，也可在 `miniapp/.env.development` / `miniapp/.env.production` 中取消 `VITE_API_BASE` 的注释。
 
 检查命令：
 
@@ -70,7 +70,7 @@ docker compose up -d --build
 然后：
 
 1. 在小程序后台把域名加入 request 和 downloadFile 合法域名。
-2. 把 `miniapp/.env.production` 的 `VITE_API_BASE` 改成 `https://你的域名`。
+2. 把根目录 `app.config.json` 的 `serverUrl`（或 `miniapp/.env.production` 的 `VITE_API_BASE`）改成 `https://你的域名`。
 3. `npm run build:mp-weixin`，用微信开发者工具导入 `miniapp/dist/build/mp-weixin` 并上传，在小程序后台设为体验版。
 
 ## 功能
