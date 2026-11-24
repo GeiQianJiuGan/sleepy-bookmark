@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/api"
 )
@@ -332,4 +333,33 @@ func TestASourceOfAListKeepsToPublicAddressesOnceUnsubscribed(t *testing.T) {
 			t.Errorf("test of %q with id %q: %+v, refused should be %v", try.rule["name"], try.id, report, try.refused)
 		}
 	}
+}
+
+// A list is as large as it is: the old 2 MB bound turned ordinary lists away.
+func TestASubscriptionLargerThanTwoMegabytesIsImported(t *testing.T) {
+	c := login(t)
+	srv, body := listServer(t)
+	site := c.site.URL + "/demo/novel"
+	const n = 600
+	var b strings.Builder
+	b.WriteString("[")
+	for i := range n {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		raw, _ := json.Marshal(map[string]any{"name": fmt.Sprint("大", i), "type": "novel", "baseUrl": site, "pad": strings.Repeat("x", 5000)})
+		b.Write(raw)
+	}
+	b.WriteString("]")
+	text := b.String()
+	if len(text) <= 2<<20 {
+		t.Fatalf("list of %d bytes", len(text))
+	}
+	body.Store(&text)
+	var res subscriptionResult
+	start := time.Now()
+	if code := c.do("POST", "/api/subscriptions", map[string]string{"url": srv.URL + "/lists/big.json"}, &res); code != 200 || res.Added != n {
+		t.Fatalf("subscribe: %d, %+v", code, res)
+	}
+	t.Logf("%d sources in %v", n, time.Since(start))
 }

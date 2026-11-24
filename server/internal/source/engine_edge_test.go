@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
@@ -182,6 +183,27 @@ func TestContentStopsAtARedirectToAPageItAlreadyRead(t *testing.T) {
 	c, err = e.Content(context.Background(), src, src.BaseURL+"/c/2", src.BaseURL+"/c/3")
 	if err != nil || len(c.Images) != 1 {
 		t.Fatalf("images before the next chapter: %v, %v", c.Images, err)
+	}
+}
+
+// The catalog links to an address that redirects to the chapter, and the rule's next page link
+// on the last page of a chapter is the next chapter's own address.
+func TestContentStopsAtTheRedirectedNextChapter(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/go", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/chapter/"+r.URL.Query().Get("slot")+".html", http.StatusFound)
+	})
+	mux.HandleFunc("/chapter/", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/chapter/"), ".html"))
+		fmt.Fprintf(w, `<html><body><img src="/i/%d.jpg"><a id="next-chapter" href="/chapter/%d.html">next</a></body></html>`, n, n+1)
+	})
+	e, src := site(t, mux)
+	src.Type = source.TypeComic
+	src.Content = source.ContentRule{Images: "css:img@src", NextPage: "css:a#next-chapter@href"}
+
+	c, err := e.Content(context.Background(), src, src.BaseURL+"/go?slot=5", src.BaseURL+"/go?slot=6")
+	if err != nil || !slices.Equal(c.Images, []string{src.BaseURL + "/i/5.jpg"}) {
+		t.Fatalf("images: %v, %v", c.Images, err)
 	}
 }
 
