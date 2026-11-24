@@ -961,3 +961,66 @@ func TestRankAndFeed(t *testing.T) {
 		}
 	}
 }
+
+// With many sources there is always one that does not answer: the feed shows the lists that
+// were read and does not wait for it.
+func TestFeedDoesNotWaitForASlowSource(t *testing.T) {
+	c := login(t)
+	var feed struct{ Total int }
+	c.do("GET", "/api/feed?type=novel", nil, &feed)
+	total := feed.Total
+	if total == 0 {
+		t.Fatal("no feed from the demo source")
+	}
+
+	gone := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-gone:
+		case <-r.Context().Done():
+		}
+	}))
+	defer slow.Close()
+	defer close(gone)
+	c.addCopy("slow", slow.URL)
+
+	// The new source is given a moment once; after that nobody waits for it.
+	c.do("GET", "/api/feed?type=novel", nil, &feed)
+	start := time.Now()
+	c.do("GET", "/api/feed?type=novel", nil, &feed)
+	if took := time.Since(start); took > time.Second || feed.Total != total {
+		t.Fatalf("feed of %d books (want %d) after %v", feed.Total, total, took)
+	}
+}
+
+// A search answers with what the fast sources found; the slow one is named as still searching.
+func TestSearchDoesNotWaitForASlowSource(t *testing.T) {
+	c := login(t)
+	gone := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-gone:
+		case <-r.Context().Done():
+		}
+	}))
+	defer slow.Close()
+	defer close(gone)
+	c.addCopy("slow", slow.URL)
+
+	var r searchResult
+	start := time.Now()
+	c.do("GET", qStar, nil, &r)
+	if took := time.Since(start); took > 4*time.Second || len(r.Books) == 0 ||
+		len(r.Errors) != 1 || r.Errors[0].Source != "slow" || r.Errors[0].Kind != "pending" {
+		t.Fatalf("after %v: %d books, errors %+v", took, len(r.Books), r.Errors)
+	}
+	// One source alone is waited for; here the reader gives up first.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", c.base+qStar+"&source="+itoa(c.sources("?type=novel")[1].ID), nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a search in the slow source alone answered with %d", resp.StatusCode)
+	}
+}

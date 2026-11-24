@@ -16,6 +16,8 @@ const (
 	rankMax          = 100
 	recommendMaxAge  = 30 * time.Minute
 	recommendTimeout = 10 * time.Second
+	// recommendFirstWait is how long a request waits for lists when none was read yet.
+	recommendFirstWait = 3 * time.Second
 	// A list that could not be read is not asked for again for this long, so that a dead site
 	// does not slow down every visit of the page.
 	recommendRetryAfter = 5 * time.Minute
@@ -52,6 +54,14 @@ func (c *recommendCache) get(row *store.SourceRow) (books []*store.Book, due boo
 	return e.books, time.Since(e.at) >= recommendMaxAge && time.Since(e.failedAt) >= recommendRetryAfter
 }
 
+// tried tells whether the source's list was read, or reading it failed, with its present rule.
+func (c *recommendCache) tried(row *store.SourceRow) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[row.ID]
+	return ok && e.rule == row.Rule
+}
+
 // put stores a list that was read, or with ok false notes that reading it failed.
 func (c *recommendCache) put(row *store.SourceRow, books []*store.Book, ok bool) {
 	c.mu.Lock()
@@ -75,39 +85,57 @@ func (c *recommendCache) put(row *store.SourceRow, books []*store.Book, ok bool)
 // one, or of the one source when sourceID is set. A source whose list cannot be read is left
 // out, or keeps showing its previous list: recommendations are optional and their failures are
 // not worth a message.
+//
+// The lists of all sources are answered from what was read before, and the ones that are due
+// are read again behind the request: with hundreds of sources there is always one that is slow
+// or gone, and the reader should not wait for it. Only for sources that were never read (new
+// ones, and all of them after a start) does the request wait, no longer than recommendFirstWait.
 func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]Recommendation, error) {
 	rows, err := l.db.Sources(typ, true)
 	if err != nil {
 		return nil, err
 	}
 	lists := make([][]*store.Book, len(rows))
-	visits := make(chan struct{}, maxVisits)
-	// With more sources than are visited at a time, the ones not reached in the time of one
-	// visit show the list they had; a later request reaches them.
-	turn, cancel := context.WithTimeout(ctx, recommendTimeout)
-	defer cancel()
-	var wg sync.WaitGroup
-	for i, row := range rows {
-		if sourceID != 0 && row.ID != sourceID {
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if old, due := l.recommends.get(row); !due {
-				lists[i] = old
-				return
-			}
-			select {
-			case visits <- struct{}{}:
-				defer func() { <-visits }()
+	if sourceID != 0 {
+		for i, row := range rows {
+			if row.ID == sourceID {
 				lists[i] = l.recommend(ctx, row)
-			case <-turn.Done():
-				lists[i], _ = l.recommends.get(row)
 			}
-		}()
+		}
+	} else {
+		var due, fresh []*store.SourceRow
+		read := func() {
+			for i, row := range rows {
+				var d bool
+				if lists[i], d = l.recommends.get(row); d {
+					due = append(due, row)
+				}
+			}
+		}
+		read()
+		for _, row := range due {
+			if !l.recommends.tried(row) && l.firstWait(row) {
+				fresh = append(fresh, row)
+			}
+		}
+		l.refresh(due)
+		if len(fresh) > 0 {
+			wait := time.NewTimer(recommendFirstWait)
+			defer wait.Stop()
+			tick := time.NewTicker(20 * time.Millisecond)
+			defer tick.Stop()
+			for waiting := true; waiting && l.refreshing(fresh); {
+				select {
+				case <-tick.C:
+				case <-wait.C:
+					waiting = false
+				case <-ctx.Done():
+					waiting = false
+				}
+			}
+			read()
+		}
 	}
-	wg.Wait()
 
 	out := []Recommendation{}
 	for i, row := range rows {
@@ -116,6 +144,58 @@ func (l *Library) rankings(ctx context.Context, typ string, sourceID int64) ([]R
 		}
 	}
 	return out, nil
+}
+
+// refresh reads the lists of the given sources again without anyone waiting for them, a few
+// sources at a time. A source that is already being read is not read twice.
+func (l *Library) refresh(rows []*store.SourceRow) {
+	l.refreshMu.Lock()
+	defer l.refreshMu.Unlock()
+	if l.inRefresh == nil {
+		l.inRefresh = map[int64]bool{}
+		l.refreshVisits = make(chan struct{}, maxVisits)
+	}
+	for _, row := range rows {
+		if l.inRefresh[row.ID] {
+			continue
+		}
+		l.inRefresh[row.ID] = true
+		go func() {
+			l.refreshVisits <- struct{}{}
+			l.recommend(context.Background(), row)
+			<-l.refreshVisits
+			l.refreshMu.Lock()
+			delete(l.inRefresh, row.ID)
+			l.refreshMu.Unlock()
+		}()
+	}
+}
+
+// firstWait tells whether no request waited for the source's list with its present rule yet:
+// a source that takes longer than the wait is waited for once, not by every request.
+func (l *Library) firstWait(row *store.SourceRow) bool {
+	l.refreshMu.Lock()
+	defer l.refreshMu.Unlock()
+	if l.waited == nil {
+		l.waited = map[int64]string{}
+	}
+	if rule, ok := l.waited[row.ID]; ok && rule == row.Rule {
+		return false
+	}
+	l.waited[row.ID] = row.Rule
+	return true
+}
+
+// refreshing tells whether any of the sources is still being read by refresh.
+func (l *Library) refreshing(rows []*store.SourceRow) bool {
+	l.refreshMu.Lock()
+	defer l.refreshMu.Unlock()
+	for _, row := range rows {
+		if l.inRefresh[row.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // Recommend returns the first books of each list, see rankings.
@@ -154,6 +234,8 @@ func (l *Library) recommend(ctx context.Context, row *store.SourceRow) []*store.
 	}
 	src, err := parseSource(row)
 	if err != nil || src.Recommend == nil {
+		// Remembered, so that a source without a list is not looked at on every request.
+		l.recommends.put(row, nil, true)
 		return nil
 	}
 	// Requests that arrive together share one visit of the site.

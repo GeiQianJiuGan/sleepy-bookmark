@@ -154,8 +154,8 @@ func (m *sourceMonitor) bucketLocked(sourceID int64) *sourceBucket {
 }
 
 // Record notes one interaction with a source: how long it took, whether it returned usable content,
-// and any error. Empty responses and errors both count as invalid content, tracked separately so
-// callers can tell a broken rule / empty search from a network failure.
+// and any error. Empty responses and errors are tracked separately; an empty search or list does
+// not count against the source, see judged.
 func (m *sourceMonitor) Record(sourceID int64, action string, elapsed time.Duration, valid bool, err error) {
 	if m == nil || sourceID <= 0 {
 		return
@@ -214,11 +214,7 @@ func (m *sourceMonitor) Record(sourceID int64, action string, elapsed time.Durat
 	b.lastErr = errText
 	b.lastKind = errKind
 
-	var bucketTotal, bucketValid int64
-	for _, a := range b.actions {
-		bucketTotal += a.Total
-		bucketValid += a.Valid
-	}
+	bucketValid, bucketTotal := judged(b.actions)
 	snap := *row
 	m.mu.Unlock()
 
@@ -310,8 +306,10 @@ func buildSourceMetrics(sourceID int64, b *sourceBucket) *SourceMetrics {
 		}
 	}
 	out.Invalid = out.Empty + out.Error
-	out.ValidRate = rate(out.Valid, out.Total)
-	out.InvalidRate = rate(out.Invalid, out.Total)
+	if valid, total := judged(b.actions); out.Total > 0 {
+		out.ValidRate = judgedRate(valid, total)
+		out.InvalidRate = rate(total-valid, total)
+	}
 	if out.Total > 0 {
 		out.AvgLatencyMs = totalLatency / out.Total
 	}
@@ -321,6 +319,29 @@ func buildSourceMetrics(sourceID int64, b *sourceBucket) *SourceMetrics {
 		out.P95LatencyMs = out.AvgLatencyMs
 	}
 	return out
+}
+
+// judged counts what tells whether a source works: of all it was asked, how much it answered
+// well. A search or a list that came back empty is left out, as not having a book says
+// nothing against a source; a site that cannot be reached, or a book of its own that cannot
+// be opened, does.
+func judged(actions map[string]*store.SourceMetricRow) (valid, total int64) {
+	for action, r := range actions {
+		valid += r.Valid
+		total += r.Total
+		if action == ActionSearch || action == ActionRecommend {
+			total -= r.Empty
+		}
+	}
+	return valid, total
+}
+
+// judgedRate is the valid rate of what judged counts, 1 while nothing counts against the source.
+func judgedRate(valid, total int64) float64 {
+	if total <= 0 {
+		return 1
+	}
+	return rate(valid, total)
 }
 
 func rate(part, total int64) float64 {
