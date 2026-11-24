@@ -125,7 +125,12 @@ export async function downloadChapters(
 
   let failed = 0
   for (let i = 0; i < chapters.length && !signal.cancelled; i++) {
-    if (!entry.chapters[chapters[i].id]) {
+    const saved = entry.chapters[chapters[i].id]
+    if (saved) {
+      // Follow the catalog: the source may have inserted or renamed chapters since the download.
+      saved.idx = chapters[i].idx
+      saved.title = chapters[i].title
+    } else {
       try {
         await saveChapter(entry, chapters[i])
       } catch (e) {
