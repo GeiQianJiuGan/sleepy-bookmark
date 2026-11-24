@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# backend runtime data (SQLite, chapter and image cache, generated JWT secret)
+data/
+/server/server
+deploy/.env
