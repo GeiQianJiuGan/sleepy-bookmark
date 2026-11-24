@@ -285,6 +285,12 @@ func (d *DB) RemoveFavorite(userID, bookID int64) error {
 	return err
 }
 
+// Favorited reports whether at least one user has the book in their favorites.
+func (d *DB) Favorited(bookID int64) bool {
+	var n int
+	return d.QueryRow(`SELECT 1 FROM favorites WHERE book_id = ? LIMIT 1`, bookID).Scan(&n) == nil
+}
+
 // FavoriteBookIDs returns every book that at least one user has in their favorites.
 func (d *DB) FavoriteBookIDs() ([]int64, error) {
 	rows, err := d.Query(`SELECT DISTINCT book_id FROM favorites`)

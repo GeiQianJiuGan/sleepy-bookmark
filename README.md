@@ -57,6 +57,7 @@ cd miniapp && npm run type-check && npm run build:mp-weixin
 | `PREFETCH_AHEAD` | `5` | 打开一章时后台预抓后面几章 |
 | `REFRESH_INTERVAL_MINUTES` | `180` | 定时刷新书架上书籍目录并缓存新章节的间隔 |
 | `IMG_CACHE_MAX_MB` | `2048` | 图片缓存上限，超出后按最久未访问清理 |
+| `KEPT_MAX_MB` | `10240` | 书架上的漫画保存图片的上限，这部分不会被自动清理；超出后新图片只进图片缓存 |
 
 ## 部署（体验版）
 

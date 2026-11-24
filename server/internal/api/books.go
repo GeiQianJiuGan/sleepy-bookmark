@@ -118,6 +118,7 @@ func (s *Server) chapter(c echo.Context) error {
 	}
 	// Concurrent requests for an uncached chapter share one fetch result, so rewrite a copy.
 	out := *ch
+	out.Origins = ch.Images
 	out.Images = make([]string, len(ch.Images))
 	for i, img := range ch.Images {
 		out.Images[i] = s.imgURL(ch.SourceID, img)
@@ -185,10 +186,7 @@ func (s *Server) addFavorite(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Book(id); err != nil {
-		return err
-	}
-	if err := s.db.AddFavorite(auth.UserID(c), id); err != nil {
+	if err := s.lib.AddFavorite(c.Request().Context(), auth.UserID(c), id); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -199,7 +197,7 @@ func (s *Server) removeFavorite(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := s.db.RemoveFavorite(auth.UserID(c), id); err != nil {
+	if err := s.lib.RemoveFavorite(auth.UserID(c), id); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)

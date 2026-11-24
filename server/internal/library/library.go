@@ -296,9 +296,11 @@ func (l *Library) refreshToc(ctx context.Context, b *store.Book) ([]*store.Chapt
 type ChapterContent struct {
 	*store.Chapter
 	source.Content
-	SourceID int64 `json:"-"`
-	PrevID   int64 `json:"prevId"`
-	NextID   int64 `json:"nextId"`
+	// Origins are the addresses of Images at the source, for clients that can load them directly.
+	Origins  []string `json:"origins,omitempty"`
+	SourceID int64    `json:"-"`
+	PrevID   int64    `json:"prevId"`
+	NextID   int64    `json:"nextId"`
 }
 
 // Chapter returns a chapter's content from the disk cache or the source, then warms the next chapters.
@@ -390,29 +392,38 @@ func (l *Library) prefetch(b *store.Book, idx int) {
 	}()
 }
 
-// cacheChapter makes sure a chapter (and optionally a comic chapter's images) is on disk.
+// cacheChapter makes sure a chapter (and optionally a comic chapter's images) is on disk. The
+// pages of a comic on somebody's shelf are kept for good while there is room for them.
 func (l *Library) cacheChapter(ctx context.Context, b *store.Book, ch *store.Chapter, withImages bool) error {
 	next, err := l.db.ChapterAt(b.ID, ch.Idx+1)
 	if err != nil {
 		next = nil
 	}
 	c, err := l.content(ctx, b, ch, next)
-	if err != nil || !withImages {
+	if err != nil || !withImages || len(c.Images) == 0 {
 		return err
 	}
+	keep := l.db.Favorited(b.ID) && l.disk.KeptBytes() < l.cfg.KeptMaxMB<<20
 	for _, img := range c.Images {
-		if _, err := l.Image(ctx, b.SourceID, img); err != nil {
+		if keep && l.disk.KeepImage(img) || !keep && l.disk.HasImage(img) {
+			continue
+		}
+		if _, err := l.fetchImage(ctx, b.SourceID, img, keep); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Image returns a source image through the disk cache.
+// Image returns a source image from the disk, or from the source and then caches it.
 func (l *Library) Image(ctx context.Context, sourceID int64, url string) ([]byte, error) {
 	if data, ok := l.disk.LoadImage(url); ok {
 		return data, nil
 	}
+	return l.fetchImage(ctx, sourceID, url, false)
+}
+
+func (l *Library) fetchImage(ctx context.Context, sourceID int64, url string, keep bool) ([]byte, error) {
 	v, err, _ := l.flight.Do("img:"+url, func() (any, error) {
 		src, err := l.loadSource(sourceID)
 		if err != nil {
@@ -424,10 +435,14 @@ func (l *Library) Image(ctx context.Context, sourceID int64, url string) ([]byte
 		if err != nil {
 			return nil, err
 		}
-		return data, l.disk.SaveImage(url, data)
+		return data, l.disk.SaveImage(url, data, keep)
 	})
 	if err != nil {
 		return nil, err
+	}
+	if keep {
+		// A reader may have asked for the same image at the same time, which caches it.
+		l.disk.KeepImage(url)
 	}
 	return v.([]byte), nil
 }
@@ -555,10 +570,53 @@ func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) 
 		}
 	}
 	if from.Favorite {
-		if err := l.db.AddFavorite(userID, toID); err != nil {
+		if err := l.AddFavorite(ctx, userID, toID); err != nil {
 			return err
 		}
-		return l.db.RemoveFavorite(userID, fromID)
+		return l.RemoveFavorite(userID, fromID)
+	}
+	return nil
+}
+
+// AddFavorite puts a book on the user's shelf. A comic is then saved on the server, pages
+// included, so that reading it later does not depend on the source site.
+func (l *Library) AddFavorite(ctx context.Context, userID, bookID int64) error {
+	b, err := l.db.Book(bookID)
+	if err != nil {
+		return err
+	}
+	if err := l.db.AddFavorite(userID, bookID); err != nil {
+		return err
+	}
+	if b.Type == source.TypeComic {
+		if _, err := l.CacheBook(ctx, bookID); err != nil {
+			log.Printf("save favorite %q: %v", b.Title, err)
+		}
+	}
+	return nil
+}
+
+// RemoveFavorite takes a book off the user's shelf. Once nobody has a comic on their shelf, its
+// saved pages go back to the image cache, where the least recently used ones are evicted.
+func (l *Library) RemoveFavorite(userID, bookID int64) error {
+	if err := l.db.RemoveFavorite(userID, bookID); err != nil {
+		return err
+	}
+	b, err := l.db.Book(bookID)
+	if err != nil || b.Type != source.TypeComic || l.db.Favorited(bookID) {
+		return nil
+	}
+	chapters, err := l.db.Chapters(bookID)
+	if err != nil {
+		return nil
+	}
+	for _, ch := range chapters {
+		var c source.Content
+		if ch.Cached && l.disk.LoadChapter(bookID, ch.ID, &c) {
+			for _, img := range c.Images {
+				l.disk.ReleaseImage(img)
+			}
+		}
 	}
 	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
 )
 
 const maxTasks = 50
@@ -142,7 +144,7 @@ func (l *Library) refreshFavorites(ctx context.Context) {
 			continue
 		}
 		for _, ch := range added {
-			if err := l.cacheChapter(ctx, b, ch, false); err != nil {
+			if err := l.cacheChapter(ctx, b, ch, b.Type == source.TypeComic); err != nil {
 				log.Printf("cache %q #%d: %v", b.Title, ch.Idx, err)
 				break
 			}

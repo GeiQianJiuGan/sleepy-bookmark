@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -30,6 +31,8 @@ type client struct {
 	token string
 	// site is the demo site that the seeded sources point at.
 	site *httptest.Server
+	lib  *library.Library
+	dir  string
 }
 
 func (c *client) do(method, path string, body any, out any) int {
@@ -267,7 +270,7 @@ func newClient(t *testing.T, cfg config.Config) *client {
 	}
 	srv := httptest.NewServer(api.New(db, a, lib, disk))
 	t.Cleanup(srv.Close)
-	return &client{t: t, base: srv.URL, site: site}
+	return &client{t: t, base: srv.URL, site: site, lib: lib, dir: cfg.DataDir}
 }
 
 func TestReadingFlow(t *testing.T) {
@@ -649,5 +652,74 @@ func TestRecommendListsTopTenPerSource(t *testing.T) {
 	bad["recommend"] = map[string]any{"url": "/rank"}
 	if code := c.do("POST", "/api/sources", bad, nil); code != http.StatusBadRequest {
 		t.Fatalf("incomplete recommend rule: %d", code)
+	}
+}
+
+// files counts the files below a directory of the data dir.
+func (c *client) files(dir string) (n int) {
+	filepath.WalkDir(filepath.Join(c.dir, dir), func(_ string, e os.DirEntry, err error) error {
+		if err == nil && !e.IsDir() {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+func TestFavoritedComicIsSavedOnTheServer(t *testing.T) {
+	c := newClient(t, config.Config{DevLogin: true, RefreshInterval: time.Hour, KeptMaxMB: 100})
+	var login struct{ Token string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &login)
+	c.token = login.Token
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go c.lib.Run(ctx)
+
+	var found struct{ Books []struct{ ID int64 } }
+	c.do("GET", "/api/search?type=comic&q=%E8%89%B2%E5%9D%97", nil, &found)
+	id := itoa(found.Books[0].ID)
+	var chapters []struct{ ID int64 }
+	c.do("GET", "/api/books/"+id+"/chapters", nil, &chapters)
+	var ch struct{ Images, Origins []string }
+	c.do("GET", "/api/chapters/"+itoa(chapters[0].ID), nil, &ch)
+	if len(ch.Origins) != len(ch.Images) || !strings.HasPrefix(ch.Origins[0], c.site.URL) {
+		t.Fatalf("origins: %+v", ch)
+	}
+	// A page that was read before the book was favorited sits in the cache.
+	if resp, err := http.Get(c.base + ch.Images[0]); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("image: %v", err)
+	}
+	if c.files("img") != 1 || c.files("kept") != 0 {
+		t.Fatalf("before the favorite: %d cached, %d kept", c.files("img"), c.files("kept"))
+	}
+
+	if code := c.do("PUT", "/api/favorites/"+id, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("add favorite: %d", code)
+	}
+	var tasks []struct{ Status string }
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		c.do("GET", "/api/tasks", nil, &tasks)
+		if len(tasks) == 1 && tasks[0].Status == "done" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the comic was not saved: %+v", tasks)
+		}
+	}
+	pages := len(chapters) * len(ch.Images)
+	if c.files("kept") != pages || c.files("img") != 0 {
+		t.Fatalf("after the favorite: %d cached, %d kept, want %d kept", c.files("img"), c.files("kept"), pages)
+	}
+	// The cache eviction leaves the saved pages alone.
+	if n := cache.New(c.dir).EvictImages(0); n != 0 || c.files("kept") != pages {
+		t.Fatalf("eviction removed %d files, %d kept", n, c.files("kept"))
+	}
+	if resp, err := http.Get(c.base + ch.Images[0]); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("saved image: %v", err)
+	}
+
+	c.do("DELETE", "/api/favorites/"+id, nil, nil)
+	if c.files("kept") != 0 || c.files("img") != pages {
+		t.Fatalf("after leaving the shelf: %d cached, %d kept", c.files("img"), c.files("kept"))
 	}
 }

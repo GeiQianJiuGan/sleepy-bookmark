@@ -22,6 +22,8 @@ type Config struct {
 	PrefetchAhead   int
 	RefreshInterval time.Duration
 	ImgCacheMaxMB   int64
+	// KeptMaxMB bounds the pages of favorited comics that are saved for good.
+	KeptMaxMB int64
 }
 
 func Load() Config {
@@ -37,6 +39,7 @@ func Load() Config {
 		PrefetchAhead:   envInt("PREFETCH_AHEAD", 5),
 		RefreshInterval: time.Duration(envInt("REFRESH_INTERVAL_MINUTES", 180)) * time.Minute,
 		ImgCacheMaxMB:   int64(envInt("IMG_CACHE_MAX_MB", 2048)),
+		KeptMaxMB:       int64(envInt("KEPT_MAX_MB", 10240)),
 	}
 	for _, id := range strings.Split(os.Getenv("OPENID_WHITELIST"), ",") {
 		if id = strings.TrimSpace(id); id != "" {
