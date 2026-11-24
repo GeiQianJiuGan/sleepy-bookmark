@@ -2,7 +2,6 @@ package source
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"html"
 	"net/url"
@@ -108,7 +107,7 @@ func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]Chapter
 	seen := map[string]bool{}
 	for u, n := tocURL, 0; u != "" && !seen[u]; n++ {
 		if n == maxTocPages {
-			return nil, fmt.Errorf("目录超过 %d 页，无法读完", maxTocPages)
+			return nil, RuleError(fmt.Sprintf("目录超过 %d 页，无法读完", maxTocPages))
 		}
 		seen[u] = true
 		doc, base, err := e.load(ctx, src, "", u, "")
@@ -125,7 +124,7 @@ func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]Chapter
 		u = resolve(base, first(doc, src.Toc.NextPage))
 	}
 	if len(out) == 0 {
-		return nil, errors.New("目录为空，请检查 toc 规则")
+		return nil, RuleError("目录为空，请检查 toc 规则")
 	}
 	if src.Toc.Reverse {
 		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
@@ -142,7 +141,7 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 	seen := map[string]bool{stopURL: true}
 	for u, n := chapterURL, 0; u != "" && !seen[u]; n++ {
 		if n == maxContentPages {
-			return c, fmt.Errorf("一章超过 %d 页，请检查 content.nextPage 规则", maxContentPages)
+			return c, RuleError(fmt.Sprintf("一章超过 %d 页，请检查 content.nextPage 规则", maxContentPages))
 		}
 		seen[u] = true
 		doc, base, err := e.load(ctx, src, "", u, "")
@@ -165,13 +164,13 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 	}
 	if src.Type == TypeComic {
 		if len(c.Images) == 0 {
-			return c, errors.New("没有解析到图片，请检查 content.images 规则")
+			return c, RuleError("没有解析到图片，请检查 content.images 规则")
 		}
 		return c, nil
 	}
 	c.Text = cleanText(strings.Join(text, "\n"), src.Content.Purify)
 	if c.Text == "" {
-		return c, errors.New("正文为空，请检查 content.body 规则")
+		return c, RuleError("正文为空，请检查 content.body 规则")
 	}
 	return c, nil
 }

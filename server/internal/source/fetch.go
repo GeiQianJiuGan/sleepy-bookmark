@@ -1,10 +1,13 @@
 package source
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +20,13 @@ const (
 	maxPageBytes = 8 << 20
 	maxImgBytes  = 30 << 20
 	pageTTL      = time.Minute
+	acceptPage   = "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.9,*/*;q=0.8"
+	acceptImage  = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
 )
+
+// RetryDelays are the pauses before each retry of a request that failed temporarily
+// (timeout, connection error, 429, 5xx).
+var RetryDelays = []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond}
 
 type page struct {
 	body []byte
@@ -37,8 +46,10 @@ type Fetcher struct {
 }
 
 func NewFetcher() *Fetcher {
+	// Sites hand out session cookies on the first page and expect them on the next ones.
+	jar, _ := cookiejar.New(nil)
 	return &Fetcher{
-		client: &http.Client{Timeout: 20 * time.Second},
+		client: &http.Client{Timeout: 15 * time.Second, Jar: jar},
 		next:   map[string]time.Time{},
 		pages:  map[string]page{},
 	}
@@ -66,10 +77,26 @@ func (f *Fetcher) throttle(ctx context.Context, src *Source) error {
 	}
 }
 
-// do returns the body, its content type and the final URL after redirects.
-func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string, limit int64) ([]byte, string, string, error) {
+// do sends a request, retrying temporary failures, and returns the body, its content type and
+// the final URL after redirects.
+func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body, accept string, limit int64) ([]byte, string, string, error) {
+	for attempt := 0; ; attempt++ {
+		data, ctype, final, err := f.once(ctx, src, method, url, body, accept, limit)
+		var fe *FetchError
+		if err == nil || attempt == len(RetryDelays) || !errors.As(err, &fe) || !fe.Temporary() {
+			return data, ctype, final, err
+		}
+		select {
+		case <-time.After(RetryDelays[attempt]):
+		case <-ctx.Done():
+			return nil, "", "", err
+		}
+	}
+}
+
+func (f *Fetcher) once(ctx context.Context, src *Source, method, url, body, accept string, limit int64) ([]byte, string, string, error) {
 	if err := f.throttle(ctx, src); err != nil {
-		return nil, "", "", err
+		return nil, "", "", transportError(err)
 	}
 	if method == "" {
 		method = http.MethodGet
@@ -78,7 +105,10 @@ func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string,
 	if err != nil {
 		return nil, "", "", err
 	}
+	// Look like a browser: many sites answer 403 to requests without these.
 	req.Header.Set("User-Agent", defaultUA)
+	req.Header.Set("Accept", accept)
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Referer", src.BaseURL+"/")
 	if body != "" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -88,14 +118,32 @@ func (f *Fetcher) do(ctx context.Context, src *Source, method, url, body string,
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", transportError(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, "", "", fmt.Errorf("%s 返回 HTTP %d", url, resp.StatusCode)
-	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
-	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), err
+	if err != nil {
+		return nil, "", "", transportError(err)
+	}
+	challenged := resp.Header.Get("Cf-Mitigated") != "" || isChallenge(data)
+	if resp.StatusCode >= 400 || challenged {
+		return nil, "", "", statusError(resp.StatusCode, challenged)
+	}
+	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), nil
+}
+
+// isChallenge recognises the interstitial page of common anti-bot services, which may come
+// with status 200 and would otherwise be parsed as an empty result.
+func isChallenge(body []byte) bool {
+	if len(body) > 64<<10 {
+		return false
+	}
+	for _, mark := range []string{"<title>Just a moment...</title>", "/cdn-cgi/challenge-platform/", "cf-browser-verification"} {
+		if bytes.Contains(body, []byte(mark)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Page fetches a text page and converts it to UTF-8. It also returns the page's final URL
@@ -111,7 +159,7 @@ func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body strin
 		return p.body, p.url, nil
 	}
 
-	data, ctype, final, err := f.do(ctx, src, method, url, body, maxPageBytes)
+	data, ctype, final, err := f.do(ctx, src, method, url, body, acceptPage, maxPageBytes)
 	if err != nil {
 		return nil, "", err
 	}
@@ -141,6 +189,6 @@ func (f *Fetcher) Page(ctx context.Context, src *Source, method, url, body strin
 
 // Image fetches a binary resource with the source's headers (Referer anti-hotlinking).
 func (f *Fetcher) Image(ctx context.Context, src *Source, url string) ([]byte, error) {
-	data, _, _, err := f.do(ctx, src, http.MethodGet, url, "", maxImgBytes)
+	data, _, _, err := f.do(ctx, src, http.MethodGet, url, "", acceptImage, maxImgBytes)
 	return data, err
 }
