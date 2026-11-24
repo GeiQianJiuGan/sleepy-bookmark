@@ -119,6 +119,9 @@ const maxRule = 1 << 20
 // list costs in memory, and whoever publishes it decides how many there are.
 const maxListRules = 50000
 
+// maxUnpacked is how much a packed list may unpack to.
+const maxUnpacked = 256 << 20
+
 var (
 	errNotRules = errors.New("not a rule list")
 	errRuleSize = errors.New("rule too large")
