@@ -668,8 +668,9 @@ func autoImages(doc *goquery.Selection, base string) []string {
 		if !slices.Contains(r.urls, u) {
 			r.urls = append(r.urls, u)
 		}
-		// A link to a picture file shows the page larger, and leads nowhere.
-		if to := resolve(base, img.Closest("a[href]").AttrOr("href", "")); to != "" && !reImageFile.MatchString(to) {
+		// A link to a picture file shows the page larger, and one to this page is a handle for
+		// a script: neither leads anywhere.
+		if to := resolve(base, img.Closest("a[href]").AttrOr("href", "")); to != "" && !reImageFile.MatchString(to) && !samePage(base, to) {
 			r.linked++
 			if !slices.Contains(r.leads, to) {
 				r.leads = append(r.leads, to)
@@ -721,6 +722,13 @@ func autoImages(doc *goquery.Selection, base string) []string {
 		}
 	}
 	return nil
+}
+
+// samePage tells whether a link leads to the page it is on, whatever place in it.
+func samePage(base, to string) bool {
+	page, _, _ := strings.Cut(base, "#")
+	at, _, _ := strings.Cut(to, "#")
+	return page == at
 }
 
 // turns tells whether a link on a chapter leads on within its book: to a page of the same kind,
