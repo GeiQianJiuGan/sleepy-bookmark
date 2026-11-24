@@ -160,3 +160,26 @@ func TestALegadoComicListIsReadWithoutItsScripts(t *testing.T) {
 		t.Errorf("type %q, images %q", src.Type, src.Content.Images)
 	}
 }
+
+func TestLegadoImagesAndBars(t *testing.T) {
+	for in, want := range map[string]string{
+		"css:img.page":         "css:img.page@src",
+		"css:.pages img":       "css:.pages img@src",
+		"css:.man_img@html":    "css:.man_img img@src",
+		"css:div>img[data-x]":  "css:div>img[data-x]@src",
+		"css:amp-img@data-src": "css:amp-img@data-src",
+	} {
+		if got := legadoImages(in); got != want {
+			t.Errorf("%s: %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{
+		"li[lang|=zh]": "css:li[lang|=zh]",
+		"./li|./dd":    "xpath:./li|./dd",
+		".a|.b":        "css:.a, .b",
+	} {
+		if got := convertLegadoExpr(in, true); got != want {
+			t.Errorf("%s: %q, want %q", in, got, want)
+		}
+	}
+}
