@@ -146,6 +146,17 @@ func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]Chapter
 	return out, nil
 }
 
+// overlap is how many images at the start of next repeat the end of prev: sites that split a
+// chapter over pages begin a page with the last images of the page before.
+func overlap(prev, next []string) int {
+	for n := min(len(prev), len(next)); n > 0; n-- {
+		if slices.Equal(prev[len(prev)-n:], next[:n]) {
+			return n
+		}
+	}
+	return 0
+}
+
 // Content follows content.nextPage until it is empty, repeats, or reaches stopURL (the next chapter).
 func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL string) (Content, error) {
 	var c Content
@@ -162,12 +173,11 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 		}
 		seen[base] = true
 		if src.Type == TypeComic {
-			// Sites that split a chapter over pages repeat the last images on the next page.
-			for _, img := range doc.Values(src.Content.Images) {
-				if img = resolve(base, img); !slices.Contains(c.Images, img) {
-					c.Images = append(c.Images, img)
-				}
+			page := doc.Values(src.Content.Images)
+			for i, img := range page {
+				page[i] = resolve(base, img)
 			}
+			c.Images = append(c.Images, page[overlap(c.Images, page):]...)
 		} else {
 			body := src.Content.Body
 			if _, isHTML := doc.(htmlNode); isHTML {

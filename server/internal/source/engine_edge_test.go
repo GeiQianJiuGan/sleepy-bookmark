@@ -125,20 +125,24 @@ func TestPaginationStopsAtARedirectedPageItAlreadyRead(t *testing.T) {
 	}
 }
 
-func TestComicPagesDoNotRepeatImages(t *testing.T) {
+func TestComicPagesOverlapIsReadOnce(t *testing.T) {
 	mux := http.NewServeMux()
+	// 1.jpg is shown twice on purpose; 2.jpg and 3.jpg are repeated at the start of page two.
 	mux.HandleFunc("/c/1", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html><body><img src="/i/1.jpg"><img src="/i/2.jpg"><a id="next" href="/c/1_2">next</a></body></html>`))
+		w.Write([]byte(`<html><body><img src="/i/1.jpg"><img src="/i/1.jpg"><img src="/i/2.jpg"><img src="/i/3.jpg"><a id="next" href="/c/1_2">next</a></body></html>`))
 	})
 	mux.HandleFunc("/c/1_2", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html><body><img src="/i/2.jpg"><img src="/i/3.jpg"></body></html>`))
+		w.Write([]byte(`<html><body><img src="/i/2.jpg"><img src="/i/3.jpg"><img src="/i/4.jpg"><img src="/i/1.jpg"></body></html>`))
 	})
 	e, src := site(t, mux)
 	src.Type = source.TypeComic
 	src.Content = source.ContentRule{Images: "css:img@src", NextPage: "css:#next@href"}
 
 	c, err := e.Content(context.Background(), src, src.BaseURL+"/c/1", "")
-	want := []string{src.BaseURL + "/i/1.jpg", src.BaseURL + "/i/2.jpg", src.BaseURL + "/i/3.jpg"}
+	var want []string
+	for _, n := range []int{1, 1, 2, 3, 4, 1} {
+		want = append(want, fmt.Sprintf("%s/i/%d.jpg", src.BaseURL, n))
+	}
 	if err != nil || !slices.Equal(c.Images, want) {
 		t.Fatalf("images: %v, %v", c.Images, err)
 	}
