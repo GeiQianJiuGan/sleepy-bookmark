@@ -35,6 +35,8 @@ let barHeight = 44
 const capsule = uni.getMenuButtonBoundingClientRect()
 barHeight = (capsule.top - statusBar) * 2 + capsule.height
 // #endif
+// The strip kept clear at the top: pages never scroll under the status bar and the capsule button.
+const headHeight = statusBar + barHeight
 
 // The status bar icons follow the page colour.
 function paintBar() {
@@ -189,8 +191,8 @@ async function show(chapterId: number, position = 0) {
     current = { chapterId, position }
     currentId.value = chapterId
     await nextTick()
-    // A novel offset is measured from the top of the chapter, which sits below the status bar.
-    setTimeout(() => scrollTo(ch.images ? { id: `p-${chapterId}-${position}` } : { top: position ? position + statusBar : 0 }), 50)
+    // A novel offset is measured from the top of the screen, and the chapter starts below the head strip.
+    setTimeout(() => scrollTo(ch.images ? { id: `p-${chapterId}-${position}` } : { top: position ? position + headHeight : 0 }), 50)
   } catch (e) {
     error.value = errorText(e)
     canSwitch.value = sourceDown(e)
@@ -278,7 +280,7 @@ function measure() {
       if (!rects?.length || rects.length !== loaded.value.length) return
       let i = 0
       rects.forEach((r, k) => {
-        if ((r.top ?? 0) <= statusBar + 80) i = k
+        if ((r.top ?? 0) <= headHeight + 80) i = k
       })
       const ch = loaded.value[i]
       const top = rects[i].top ?? 0
@@ -359,6 +361,9 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
     :class="{ night }"
     :style="{ background: theme.bg, color: theme.fg, fontSize: store.reader.fontSize + 'px' }"
   >
+    <view class="head" :style="{ height: headHeight + 'px', paddingTop: statusBar + 'px' }">
+      <view class="head-title ellipsis">{{ title }}</view>
+    </view>
     <scroll-view
       class="scroller"
       scroll-y
@@ -371,7 +376,6 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
       @scrolltolower="appendNext"
       @click="onTap"
     >
-      <view :style="{ height: statusBar + 'px' }" />
       <view v-for="ch in loaded" :key="ch.id" class="chapter">
         <view class="chapter-title" :class="{ comic: isComic }">{{ ch.title }}</view>
         <template v-if="ch.images">
@@ -505,6 +509,8 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
 <style lang="scss" scoped>
 .reader {
   position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   // The menu takes the colours of a sheet of paper, or of the night.
@@ -521,8 +527,24 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
   }
 }
 
+.head {
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  // Stays clear of the capsule button on the right.
+  padding-right: 220rpx;
+  padding-left: 36rpx;
+}
+
+.head-title {
+  font-size: 24rpx;
+  opacity: 0.55;
+}
+
 .scroller {
-  height: 100%;
+  flex: 1;
+  height: 0;
 
   // show-scrollbar covers the mini program; this covers the browsers.
   scrollbar-width: none;

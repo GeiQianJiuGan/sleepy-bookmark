@@ -47,6 +47,7 @@ cd miniapp && npm run type-check && npm run build:mp-weixin
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `ADDR` | `:8080` | 监听地址 |
+| `TLS_ADDR`、`TLS_CERT`、`TLS_KEY` | 空 | 填了就在 `TLS_ADDR` 上再开一个 HTTPS 端口，证书和私钥是 PEM 文件路径。放在 Cloudflare 后面时用 Cloudflare 支持的 HTTPS 端口（如 `:8443`），「完全」模式下自签证书即可 |
 | `DATA_DIR` | `./data` | SQLite、正文缓存、图片缓存、自动生成的 JWT 密钥 |
 | `PUBLIC_URL` | `http://127.0.0.1:<端口>` | 后端的对外地址，演示书源用它拼地址 |
 | `WX_APPID` / `WX_SECRET` | 空 | 小程序凭据，用于 `wx.login` 换 openid |
