@@ -114,7 +114,7 @@ type TocEntry struct{ Title, URL string }
 // ReplaceToc syncs the chapter list of a book. A chapter keeps its id (which reading progress
 // and the content cache refer to) when the source inserts, removes or reorders chapters:
 // entries are matched to the existing chapters by URL, then by title for chapters whose URL
-// changed. It returns the ids whose cached content is no longer valid.
+// changed and whose title is unambiguous. It returns the ids whose cached content is no longer valid.
 func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error) {
 	old, err := d.Chapters(bookID)
 	if err != nil {
@@ -123,23 +123,35 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 	// match[i] is the existing chapter that toc[i] continues, nil for a new chapter.
 	match := make([]*Chapter, len(toc))
 	used := map[int64]bool{}
-	pair := func(key func(title, url string) string) {
-		free := map[string][]*Chapter{}
-		for _, c := range old {
-			if k := key(c.Title, c.URL); !used[c.ID] && k != "" {
-				free[k] = append(free[k], c)
-			}
-		}
-		for i, t := range toc {
-			k := key(t.Title, t.URL)
-			if match[i] == nil && len(free[k]) > 0 {
-				match[i], free[k] = free[k][0], free[k][1:]
-				used[match[i].ID] = true
-			}
+	free := map[string][]*Chapter{}
+	for _, c := range old {
+		free[c.URL] = append(free[c.URL], c)
+	}
+	for i, t := range toc {
+		if same := free[t.URL]; len(same) > 0 {
+			match[i], free[t.URL] = same[0], same[1:]
+			used[same[0].ID] = true
 		}
 	}
-	pair(func(_, url string) string { return url })
-	pair(func(title, _ string) string { return title })
+	// A title identifies a chapter only if no other unmatched chapter has it on either side;
+	// otherwise the entry counts as new rather than risk continuing the wrong chapter.
+	oldByTitle, newCount := map[string][]*Chapter{}, map[string]int{}
+	for _, c := range old {
+		if !used[c.ID] {
+			oldByTitle[c.Title] = append(oldByTitle[c.Title], c)
+		}
+	}
+	for i, t := range toc {
+		if match[i] == nil {
+			newCount[t.Title]++
+		}
+	}
+	for i, t := range toc {
+		if same := oldByTitle[t.Title]; match[i] == nil && t.Title != "" && len(same) == 1 && newCount[t.Title] == 1 {
+			match[i] = same[0]
+			used[same[0].ID] = true
+		}
+	}
 	// A chapter's content is read up to the URL of the chapter after it (see Engine.Content),
 	// so it has to be read again when a different chapter follows it.
 	oldNext := map[int64]string{}

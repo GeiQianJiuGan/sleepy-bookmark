@@ -167,3 +167,24 @@ func TestMarkChapterCachedOnlyForTheCurrentRule(t *testing.T) {
 		t.Fatal("content fetched with the current rule was not marked cached")
 	}
 }
+
+// Two chapters share a title and the site moves to new URLs while dropping the first of them:
+// the remaining one cannot be told apart by title, so no id is carried over to it.
+func TestReplaceTocDoesNotGuessBetweenChaptersWithTheSameTitle(t *testing.T) {
+	db, bookID := newBook(t)
+	if _, err := db.ReplaceToc(bookID, []TocEntry{{"notice", "/old/1"}, {"one", "/old/2"}, {"notice", "/old/3"}}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := db.Chapters(bookID)
+
+	if _, err := db.ReplaceToc(bookID, []TocEntry{{"one", "/new/2"}, {"notice", "/new/3"}}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := db.Chapters(bookID)
+	if after[0].ID != before[1].ID {
+		t.Errorf("chapter with a unique title changed id from %d to %d", before[1].ID, after[0].ID)
+	}
+	if after[1].ID == before[0].ID || after[1].ID == before[2].ID {
+		t.Errorf("an ambiguous title was matched to an existing chapter: %+v", after[1])
+	}
+}
