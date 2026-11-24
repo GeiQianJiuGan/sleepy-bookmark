@@ -32,6 +32,7 @@ var (
 	reFullCatalog = regexp.MustCompile(`全部章节|完整目录|所有章节|章节目录|查看目录|全部目录|更多章节|章节列表|全部章節|章節目錄`)
 	reBodyHint    = regexp.MustCompile(`(?i)content|chapter|article|read|text|txt|booktext|nr`)
 	reScriptImage = regexp.MustCompile(`(?i)https?:(?:\\?/){2}[^"'\s<>\\]+(?:\\?/[^"'\s<>\\]+)*\.(?:jpe?g|png|webp)(?:\?[^"'\s<>\\]*)?`)
+	reImageFile   = regexp.MustCompile(`(?i)\.(?:jpe?g|png|webp|gif|avif)(?:\?.*)?$`)
 	reNumber      = regexp.MustCompile(`第\s*(\d+)|^\D{0,4}(\d+)`)
 
 	chrome     = "nav, header, footer, [class*=nav], [id*=nav], [class*=menu], [class*=foot], [id*=foot], [class*=breadcrumb]"
@@ -642,6 +643,9 @@ func autoImages(doc *goquery.Selection, base string) []string {
 	type run struct {
 		urls   []string
 		linked int
+		// leads are the places that its linked pictures lead to: a book each for covers, the
+		// one next page for pages that turn when clicked.
+		leads []string
 	}
 	runs := map[*html.Node]*run{}
 	var order []*html.Node
@@ -664,18 +668,22 @@ func autoImages(doc *goquery.Selection, base string) []string {
 		if !slices.Contains(r.urls, u) {
 			r.urls = append(r.urls, u)
 		}
-		if img.Closest("a[href]").Length() > 0 {
+		// A link to a picture file shows the page larger, and leads nowhere.
+		if to := resolve(base, img.Closest("a[href]").AttrOr("href", "")); to != "" && !reImageFile.MatchString(to) {
 			r.linked++
+			if !slices.Contains(r.leads, to) {
+				r.leads = append(r.leads, to)
+			}
 		}
 	})
-	// Pictures that are links are mostly the covers of other books: they are the pages only if
-	// nothing else is, neither pictures of their own nor a list in a script.
+	// Pictures that each lead somewhere else are mostly the covers of other books: they are the
+	// pages only if nothing else is, neither pictures of their own nor a list in a script.
 	var plain, linked, listed, single []string
 	alone := 0
 	for _, box := range order {
 		r := runs[box]
 		into := &plain
-		if r.linked*2 > len(r.urls) {
+		if r.linked*2 > len(r.urls) && len(r.leads) > 1 {
 			into = &linked
 		}
 		if len(r.urls) >= 2 && len(r.urls) > len(*into) {

@@ -510,6 +510,33 @@ func TestAChapterOfOnePictureIsRead(t *testing.T) {
 	}
 }
 
+func TestPagesThatTurnWhenClickedAreReadAndNotTheBannerBesideThem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var pages strings.Builder
+		for i := 1; i <= 4; i++ {
+			href := "/manga/1/2.html"
+			if r.URL.Path == "/manga/2/1.html" {
+				href = fmt.Sprintf("/big/%d.jpg", i)
+			}
+			fmt.Fprintf(&pages, `<a href="%s"><img src="/page/%d.jpg"></a>`, href, i)
+		}
+		fmt.Fprintf(w, frame, "", `<div class="notice"><img src="/banner.png"></div><div class="reader">`+pages.String()+`</div>`)
+	}))
+	defer srv.Close()
+	src := &source.Source{Name: "点图翻页", Type: source.TypeComic, BaseURL: srv.URL, RateLimitMs: 1}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	// The pages lead to the next chapter in one comic, and to their own larger file in the other.
+	for _, chapter := range []string{"/manga/1/1.html", "/manga/2/1.html"} {
+		c, err := e.Content(context.Background(), src, srv.URL+chapter, "")
+		if err != nil || len(c.Images) != 4 || c.Images[0] != srv.URL+"/page/1.jpg" {
+			t.Errorf("%s: images = %v (%v), want the four pages", chapter, c.Images, err)
+		}
+	}
+}
+
 func TestTheRestOfAChapterThatRedirectsIsRead(t *testing.T) {
 	part := func(text, next string) string {
 		return `<div id="content">` + strings.Repeat("<p>"+text+"，这一段是正文的内容，写得足够长，才认得出是正文。</p>", 6) +
