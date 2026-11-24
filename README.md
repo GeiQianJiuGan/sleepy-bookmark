@@ -32,8 +32,8 @@ npm run dev:h5          # 或者在浏览器里调试
 ```
 
 - `DEMO_SOURCE=true` 会在后端挂一个假的小说站和漫画站，并自动添加两个书源，搜索「演示」即可走通全流程。
-- 微信开发者工具里需要勾选「不校验合法域名」。复制根目录 `app.config.example.json` 为 `app.config.json`（已被 `.gitignore` 忽略），填入 `serverUrl` 和 `appId`；构建/开发时会自动注入后端地址与小程序 AppID。
-- 如需按环境覆盖后端地址，也可在 `miniapp/.env.development` / `miniapp/.env.production` 中取消 `VITE_API_BASE` 的注释。
+- 微信开发者工具里需要勾选「不校验合法域名」，并在根目录 `app.config.json` 中配置 `appId`（构建/开发时会自动同步到 `miniapp/src/manifest.json`）。
+- 后端地址统一在根目录 `app.config.json` 的 `serverUrl` 中配置（也可在 `miniapp/.env.development` / `miniapp/.env.production` 中通过 `VITE_API_BASE` 按环境覆盖）。
 
 检查命令：
 
