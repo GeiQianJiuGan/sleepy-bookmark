@@ -114,7 +114,13 @@ func (s *Server) importRules(rules []*source.Source, subscription int64) (ids []
 	ids = make([]int64, 0, len(rules))
 	for _, src := range rules {
 		var id int64
-		if same := byName[nameKey(src.Type, src.Name)]; len(same) == 1 {
+		same := byName[nameKey(src.Type, src.Name)]
+		// Of several sources of the name, the one this list brought earlier is the one it
+		// updates; without that, every sync would add one more.
+		if mine := slices.IndexFunc(same, func(r *store.SourceRow) bool { return r.SubscriptionID == subscription }); subscription != 0 && mine >= 0 {
+			same = same[mine : mine+1]
+		}
+		if len(same) == 1 {
 			if err := s.replaceRule(same[0], src); err != nil {
 				return ids, updated, err
 			}

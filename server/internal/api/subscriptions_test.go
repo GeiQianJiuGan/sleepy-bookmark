@@ -219,3 +219,71 @@ func TestDeletingASubscriptionThatDoesNotExistDeletesNothing(t *testing.T) {
 		t.Fatalf("%d sources left, want the two of the demo and the one that was added", len(sources))
 	}
 }
+
+func TestASyncThatOutlivesItsSubscriptionImportsNothing(t *testing.T) {
+	c := login(t)
+	list := `[{"name":"甲","type":"novel","baseUrl":"https://example.com"},{"name":"乙","type":"novel","baseUrl":"https://example.com"}]`
+	asked, release := make(chan struct{}, 1), make(chan struct{})
+	var slow atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slow.Load() {
+			asked <- struct{}{}
+			<-release
+		}
+		fmt.Fprint(w, list)
+	}))
+	defer srv.Close()
+	before := len(c.sources(""))
+	var res subscriptionResult
+	if code := c.do("POST", "/api/subscriptions", map[string]string{"url": srv.URL + "/list.json"}, &res); code != 200 || res.Added != 2 {
+		t.Fatalf("subscribe: %d %+v", code, res)
+	}
+	path := fmt.Sprintf("/api/subscriptions/%d", res.Subscription.ID)
+
+	slow.Store(true)
+	synced := make(chan int)
+	go func() { synced <- c.do("POST", path+"/sync", nil, nil) }()
+	<-asked
+	if code := c.do("DELETE", path+"?sources=1", nil, nil); code != http.StatusNoContent {
+		t.Fatalf("unsubscribe with sources: %d", code)
+	}
+	close(release)
+	if code := <-synced; code != http.StatusNotFound {
+		t.Errorf("sync of a subscription deleted meanwhile: %d, want 404", code)
+	}
+	if got := len(c.sources("")); got != before {
+		t.Errorf("%d sources, want the %d from before the subscription", got, before)
+	}
+}
+
+func TestSyncingDoesNotAddASourceAgainWhenItsNameIsTaken(t *testing.T) {
+	c := login(t)
+	srv, body := listServer(t)
+	// Two sources of the same name and type were added by hand before the list names one too.
+	for _, name := range []string{"甲", "乙"} {
+		if code := c.do("POST", "/api/sources", map[string]string{"name": name, "type": "novel", "baseUrl": "https://example.com"}, nil); code != 200 {
+			t.Fatalf("create: %d", code)
+		}
+	}
+	all := c.sources("")
+	renamed := map[string]string{"name": "甲", "type": "novel", "baseUrl": "https://example.com"}
+	if code := c.do("PUT", fmt.Sprintf("/api/sources/%d", all[len(all)-1].ID), renamed, nil); code != http.StatusNoContent {
+		t.Fatalf("rename: %d", code)
+	}
+	list := `[{"name":"甲","type":"novel","baseUrl":"https://example.org"}]`
+	body.Store(&list)
+	before := len(c.sources(""))
+	var res subscriptionResult
+	if code := c.do("POST", "/api/subscriptions", map[string]string{"url": srv.URL + "/list.json"}, &res); code != 200 || res.Added != 1 {
+		t.Fatalf("subscribe: %d %+v", code, res)
+	}
+	for range 3 {
+		path := fmt.Sprintf("/api/subscriptions/%d/sync", res.Subscription.ID)
+		if code := c.do("POST", path, nil, &res); code != 200 || res.Added != 0 || res.Updated != 1 || res.Subscription.Sources != 1 {
+			t.Fatalf("sync: %d %+v", code, res)
+		}
+	}
+	if got := len(c.sources("")); got != before+1 {
+		t.Fatalf("%d sources, want %d", got, before+1)
+	}
+}
