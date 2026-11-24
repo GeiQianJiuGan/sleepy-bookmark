@@ -125,25 +125,18 @@ func (f *Fetcher) once(ctx context.Context, src *Source, method, url, body, acce
 	if err != nil {
 		return nil, "", "", transportError(err)
 	}
-	challenged := resp.Header.Get("Cf-Mitigated") != "" || isChallenge(data)
+	challenged := resp.Header.Get("Cf-Mitigated") == "challenge" || isChallenge(data)
 	if resp.StatusCode >= 400 || challenged {
 		return nil, "", "", statusError(resp.StatusCode, challenged)
 	}
 	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), nil
 }
 
-// isChallenge recognises the interstitial page of common anti-bot services, which may come
-// with status 200 and would otherwise be parsed as an empty result.
+// isChallenge recognises the interstitial page of an anti-bot service, which may come with
+// status 200 and would otherwise be parsed as an empty result. It goes by the page title only:
+// ordinary pages of protected sites also load scripts from the challenge paths.
 func isChallenge(body []byte) bool {
-	if len(body) > 64<<10 {
-		return false
-	}
-	for _, mark := range []string{"<title>Just a moment...</title>", "/cdn-cgi/challenge-platform/", "cf-browser-verification"} {
-		if bytes.Contains(body, []byte(mark)) {
-			return true
-		}
-	}
-	return false
+	return len(body) < 64<<10 && bytes.Contains(body, []byte("<title>Just a moment...</title>"))
 }
 
 // Page fetches a text page and converts it to UTF-8. It also returns the page's final URL

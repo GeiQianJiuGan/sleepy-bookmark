@@ -50,6 +50,10 @@ func TestFailuresAreClassified(t *testing.T) {
 	mux.HandleFunc("/challenge", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html><head><title>Just a moment...</title></head><body></body></html>`))
 	})
+	// An ordinary page of a site behind the same service: it only loads the detection script.
+	mux.HandleFunc("/protected", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<div id="content">text</div><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>`))
+	})
 	mux.HandleFunc("/empty", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`<p>nothing here</p>`)) })
 	e, src := site(t, mux)
 
@@ -59,6 +63,7 @@ func TestFailuresAreClassified(t *testing.T) {
 		"/gone":      source.KindNotFound,
 		"/challenge": source.KindBlocked,
 		"/empty":     source.KindRule,
+		"/protected": "",
 	} {
 		_, err := e.Content(context.Background(), src, src.BaseURL+path, "")
 		if got := source.Kind(err); got != want {
