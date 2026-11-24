@@ -677,9 +677,10 @@ func autoImages(doc *goquery.Selection, base string) []string {
 		}
 	})
 	// Pictures that lead nowhere are the pages before pictures that all lead to one place, which
-	// are pages that turn when clicked, or else a row of notices for one offer. Pictures that
-	// each lead somewhere else are mostly the covers of other books: they are the pages only if
-	// nothing else is, neither pictures of their own nor a list in a script.
+	// are pages that turn when clicked, or else a row of notices for one offer. Either is taken
+	// before what a script lists, which may be anything. Pictures that each lead somewhere else
+	// are mostly the covers of other books: they are the pages only if nothing else is, neither
+	// pictures of their own nor a list in a script.
 	var plain, turning, linked, listed, single []string
 	alone := 0
 	for _, box := range order {
@@ -714,7 +715,7 @@ func autoImages(doc *goquery.Selection, base string) []string {
 			listed = urls
 		}
 	})
-	for _, found := range [][]string{plain, listed, turning, single, linked} {
+	for _, found := range [][]string{plain, turning, listed, single, linked} {
 		if found != nil {
 			return found
 		}

@@ -539,7 +539,9 @@ func TestPagesThatTurnWhenClickedAreReadAndNotTheBannerBesideThem(t *testing.T) 
 			}
 			fmt.Fprintf(&pages, `<a href="%s"><img src="/page/%d.jpg"></a>`, href, i)
 		}
-		fmt.Fprintf(w, frame, "", `<div class="notice"><img src="/banner.png"></div><div class="reader">`+pages.String()+`</div>`)
+		// What the scripts of the site name are its own pictures, not the chapter's.
+		fmt.Fprintf(w, frame, `<script>var skin = ["https://static.invalid/a.png", "https://static.invalid/b.png"]</script>`,
+			`<div class="notice"><img src="/banner.png"></div><div class="reader">`+pages.String()+`</div>`)
 	}))
 	defer srv.Close()
 	src := &source.Source{Name: "点图翻页", Type: source.TypeComic, BaseURL: srv.URL, RateLimitMs: 1}
