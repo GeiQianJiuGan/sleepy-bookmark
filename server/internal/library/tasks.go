@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
+	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
 )
 
 const maxTasks = 50
@@ -145,10 +146,32 @@ func (l *Library) refreshFavorites(ctx context.Context) {
 			continue
 		}
 		for _, ch := range added {
-			if err := l.cacheChapter(ctx, b, ch, b.Type == source.TypeComic); err != nil {
+			if err := l.cacheChapter(ctx, b, ch, false); err != nil {
 				log.Printf("cache %q #%d: %v", b.Title, ch.Idx, err)
 				break
 			}
+		}
+		if b.Type == source.TypeComic {
+			l.saveComic(ctx, b)
+		}
+	}
+}
+
+// saveComic brings the saved copy of a comic on a shelf up to date: every chapter whose pages
+// are not all kept yet, whenever it was added to the catalog and whoever read it since. It stops
+// when the kept images are full, so that the pages are not fetched again on every round.
+func (l *Library) saveComic(ctx context.Context, b *store.Book) {
+	chapters, err := l.db.Chapters(b.ID)
+	if err != nil {
+		return
+	}
+	for _, ch := range chapters {
+		if ctx.Err() != nil || l.disk.KeptBytes() >= l.cfg.KeptMaxMB<<20 {
+			return
+		}
+		if err := l.cacheChapter(ctx, b, ch, true); err != nil {
+			log.Printf("save %q #%d: %v", b.Title, ch.Idx, err)
+			return
 		}
 	}
 }

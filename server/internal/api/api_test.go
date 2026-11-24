@@ -667,7 +667,7 @@ func (c *client) files(dir string) (n int) {
 }
 
 func TestFavoritedComicIsSavedOnTheServer(t *testing.T) {
-	c := newClient(t, config.Config{DevLogin: true, RefreshInterval: time.Hour, KeptMaxMB: 100})
+	c := newClient(t, config.Config{DevLogin: true, RefreshInterval: 300 * time.Millisecond, KeptMaxMB: 100})
 	var login struct{ Token string }
 	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &login)
 	c.token = login.Token
@@ -716,6 +716,13 @@ func TestFavoritedComicIsSavedOnTheServer(t *testing.T) {
 	}
 	if resp, err := http.Get(c.base + ch.Images[0]); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("saved image: %v", err)
+	}
+	// Pages that are not saved, for whatever reason, are fetched by the periodic refresh.
+	os.RemoveAll(filepath.Join(c.dir, "kept"))
+	for deadline := time.Now().Add(20 * time.Second); c.files("kept") != pages; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the refresh: %d kept", c.files("kept"))
+		}
 	}
 
 	c.do("DELETE", "/api/favorites/"+id, nil, nil)
