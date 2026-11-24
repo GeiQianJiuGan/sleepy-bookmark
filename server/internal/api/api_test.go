@@ -233,6 +233,54 @@ func TestConcurrentComicRequestsGetCleanImageLinks(t *testing.T) {
 	}
 }
 
+func TestEditingContentRuleDropsCachedChapters(t *testing.T) {
+	c := newClient(t, config.Config{DevLogin: true})
+	var login struct{ Token string }
+	c.do("POST", "/api/auth/login", map[string]string{"code": "x"}, &login)
+	c.token = login.Token
+
+	var found struct{ Books []struct{ ID int64 } }
+	c.do("GET", "/api/search?type=novel&q=%E6%98%9F%E6%B2%B3", nil, &found)
+	var chapters []struct{ ID int64 }
+	c.do("GET", "/api/books/"+itoa(found.Books[0].ID)+"/chapters", nil, &chapters)
+	path := "/api/chapters/" + itoa(chapters[0].ID)
+	var ch struct{ Text string }
+	c.do("GET", path, nil, &ch)
+	if !strings.Contains(ch.Text, "最后一段") {
+		t.Fatalf("unexpected chapter text: %q", ch.Text)
+	}
+
+	var list []struct {
+		ID   int64
+		Type string
+		Rule map[string]any
+	}
+	c.do("GET", "/api/sources?type=novel", nil, &list)
+	rule := list[0].Rule
+
+	// A rename keeps the cache; the text is unchanged.
+	rule["name"] = "renamed"
+	if code := c.do("PUT", "/api/sources/"+itoa(list[0].ID), rule, nil); code != http.StatusNoContent {
+		t.Fatalf("rename: %d", code)
+	}
+	var cached []struct{ Cached bool }
+	c.do("GET", "/api/books/"+itoa(found.Books[0].ID)+"/chapters", nil, &cached)
+	if !cached[0].Cached {
+		t.Fatal("renaming the source dropped the chapter cache")
+	}
+
+	// A new purify rule must apply to chapters that were already cached.
+	rule["content"].(map[string]any)["purify"] = []string{".*最后一段。"}
+	if code := c.do("PUT", "/api/sources/"+itoa(list[0].ID), rule, nil); code != http.StatusNoContent {
+		t.Fatalf("update: %d", code)
+	}
+	ch.Text = ""
+	c.do("GET", path, nil, &ch)
+	if ch.Text == "" || strings.Contains(ch.Text, "最后一段") {
+		t.Fatalf("chapter still served from the old rule's cache: %q", ch.Text)
+	}
+}
+
 func TestSourceManagement(t *testing.T) {
 	c := newClient(t, config.Config{DevLogin: true})
 	var login struct{ Token string }

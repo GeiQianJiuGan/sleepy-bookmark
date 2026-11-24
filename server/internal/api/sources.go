@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/labstack/echo/v4"
 
@@ -83,11 +85,44 @@ func (s *Server) updateSource(c echo.Context) error {
 	if len(rules) != 1 {
 		return badRequest("一次只能更新一个书源")
 	}
+	row, err := s.db.Source(id)
+	if err != nil {
+		return err
+	}
 	raw, _ := json.Marshal(rules[0])
 	if err := s.db.UpdateSource(id, rules[0].Name, rules[0].Type, string(raw)); err != nil {
 		return err
 	}
+	// What was fetched with the old rule must not outlive it.
+	old, _ := source.ParseSource([]byte(row.Rule))
+	if catalog, content := rulesChanged(old, rules[0]); catalog {
+		if err := s.db.ResetSourceBooks(id, content); err != nil {
+			return err
+		}
+		if content {
+			bookIDs, err := s.db.BookIDsBySource(id)
+			if err != nil {
+				return err
+			}
+			for _, bookID := range bookIDs {
+				s.disk.RemoveBook(bookID)
+			}
+		}
+	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// rulesChanged reports whether an edit affects the stored catalogs of a source's books, and
+// whether it also affects the cached chapter content.
+func rulesChanged(old, cur *source.Source) (catalog, content bool) {
+	if old == nil {
+		return true, true
+	}
+	content = old.Type != cur.Type || old.Charset != cur.Charset || !maps.Equal(old.Headers, cur.Headers) ||
+		old.Content.Body != cur.Content.Body || old.Content.Images != cur.Content.Images ||
+		old.Content.NextPage != cur.Content.NextPage || !slices.Equal(old.Content.Purify, cur.Content.Purify)
+	catalog = content || old.BaseURL != cur.BaseURL || old.Detail != cur.Detail || old.Toc != cur.Toc
+	return catalog, content
 }
 
 func (s *Server) toggleSource(c echo.Context) error {

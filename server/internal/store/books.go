@@ -268,6 +268,16 @@ func (d *DB) RemoveHistory(userID, bookID int64) error {
 	return err
 }
 
+// ResetSourceBooks makes the books of a source re-read their detail and catalog the next time
+// they are opened, and with content also forgets which chapters are cached.
+func (d *DB) ResetSourceBooks(sourceID int64, content bool) error {
+	if _, err := d.Exec(`UPDATE books SET detail_at = 0, toc_at = 0 WHERE source_id = ?`, sourceID); err != nil || !content {
+		return err
+	}
+	_, err := d.Exec(`UPDATE chapters SET cached = 0 WHERE book_id IN (SELECT id FROM books WHERE source_id = ?)`, sourceID)
+	return err
+}
+
 func (d *DB) BookIDsBySource(sourceID int64) ([]int64, error) {
 	rows, err := d.Query(`SELECT id FROM books WHERE source_id = ?`, sourceID)
 	if err != nil {
