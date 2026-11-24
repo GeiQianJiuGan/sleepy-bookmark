@@ -478,7 +478,12 @@ func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) 
 	if err != nil {
 		return err
 	}
-	if p := from.Progress; p != nil && len(chapters) > 0 {
+	to, err := l.db.ShelfBook(userID, toID)
+	if err != nil {
+		return err
+	}
+	// The most recent reading position wins: a newer bookmark in the destination stays.
+	if p := from.Progress; p != nil && len(chapters) > 0 && (to.Progress == nil || to.Progress.UpdatedAt <= p.UpdatedAt) {
 		// Same title, and if several chapters have it, the one nearest to the old position;
 		// without a title match, the chapter at the old position.
 		target := chapters[min(p.ChapterIdx, len(chapters)-1)]
@@ -492,6 +497,8 @@ func (l *Library) SwitchSource(ctx context.Context, userID, fromID, toID int64) 
 		if err := l.db.SaveProgress(userID, toID, target.ID, 0); err != nil {
 			return err
 		}
+	}
+	if from.Progress != nil {
 		if err := l.db.RemoveHistory(userID, fromID); err != nil {
 			return err
 		}
