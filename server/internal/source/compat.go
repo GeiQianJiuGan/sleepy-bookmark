@@ -322,7 +322,7 @@ func firstLegadoExploreURL(s string) string {
 }
 
 // reImgTag is a last selector step that is a picture itself: img, img.page, amp-img, div>img.
-var reImgTag = regexp.MustCompile(`(^|[>+~-])img([.#\[:]|$)`)
+var reImgTag = regexp.MustCompile(`(^|[>+~])(amp-)?img([.#\[:]|$)`)
 
 var reLegadoIndex = regexp.MustCompile(`\.(-?\d+)$`)
 
