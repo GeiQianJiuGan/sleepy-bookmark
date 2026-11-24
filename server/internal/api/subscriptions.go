@@ -26,7 +26,8 @@ import (
 var localLists bool
 
 // publicOnly refuses connections to addresses that are not on the public internet. It runs on
-// every connection, so a redirect to such an address is refused as well.
+// every connection, so a redirect to such an address is refused as well. The client that uses
+// it takes no proxy from the environment: through one, the address checked would be the proxy's.
 func publicOnly(_, address string, _ syscall.RawConn) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -43,7 +44,6 @@ func publicOnly(_, address string, _ syscall.RawConn) error {
 var subscriptionClient = &http.Client{
 	Timeout: 20 * time.Second,
 	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
 		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, Control: publicOnly}).DialContext,
 		TLSHandshakeTimeout: 10 * time.Second,
 		MaxIdleConns:        4,
