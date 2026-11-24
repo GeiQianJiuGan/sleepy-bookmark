@@ -98,6 +98,19 @@ function pageFailed(ch: Loaded, i: number) {
   if (++directFailures >= 3) route = 'server'
 }
 
+// Choosing the server applies to the pages on screen as well, not only to the chapters to come.
+watch(
+  () => store.reader.imageRoute,
+  (r) => {
+    if (r !== 'server') return
+    route = ''
+    for (const ch of loaded.value) {
+      if (ch.proxied) ch.images = ch.proxied
+      ch.proxied = undefined
+    }
+  },
+)
+
 /** Reads a chapter from the device if it is there, otherwise from the server. */
 async function fetchChapter(id: number): Promise<Loaded> {
   let c: ChapterContent | null = readOfflineChapter(bookId, id)
