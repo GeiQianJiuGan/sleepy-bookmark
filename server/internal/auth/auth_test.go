@@ -185,6 +185,8 @@ func TestLoginExplainsWhyWeChatRefused(t *testing.T) {
 		// Refused before WeChat is asked.
 		{"real-code", "wx-other", http.StatusBadRequest, "wx-other", 0},
 		{devCode, "", http.StatusBadRequest, "不在微信小程序内", 0},
+		// What the client sent is not repeated when it could forge a log line.
+		{"real-code", "wx-other\n2026/11/24 forged", http.StatusBadRequest, "无法识别", 0},
 	} {
 		calls.Store(0)
 		_, err := a.Login(context.Background(), tc.code, tc.appID)
@@ -195,6 +197,9 @@ func TestLoginExplainsWhyWeChatRefused(t *testing.T) {
 		}
 		if strings.Contains(fmt.Sprint(he.Message), "wx-secret") {
 			t.Errorf("code %q: message leaks the app secret: %v", tc.code, he.Message)
+		}
+		if strings.ContainsAny(he.Error(), "\r\n") {
+			t.Errorf("code %q, appid %q: the logged error spans several lines: %q", tc.code, tc.appID, he.Error())
 		}
 		if calls.Load() != tc.calls {
 			t.Errorf("code %q, appid %q: WeChat was asked %d times, want %d", tc.code, tc.appID, calls.Load(), tc.calls)

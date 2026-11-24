@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -191,6 +192,9 @@ var wxErrors = map[int]struct {
 	45011: {http.StatusTooManyRequests, "登录太频繁，请一分钟后再试"},
 }
 
+// plainID matches what an AppID may look like.
+var plainID = regexp.MustCompile(`^[0-9A-Za-z_-]{1,32}$`)
+
 // wxOpenID checks what the client sent and asks WeChat whose code it is.
 // Its errors are worded for the user; what WeChat answered is their internal error.
 func (a *Auth) wxOpenID(ctx context.Context, code, appID string) (string, error) {
@@ -200,6 +204,10 @@ func (a *Auth) wxOpenID(ctx context.Context, code, appID string) (string, error)
 	case code == devCode:
 		return "", echo.NewHTTPError(http.StatusBadRequest, "当前不在微信小程序内，无法微信登录（H5 调试版只能连接开启 DEV_LOGIN 的后端）")
 	case appID != "" && appID != a.cfg.WXAppID:
+		// Anyone can send anything here, and the message is also logged.
+		if !plainID.MatchString(appID) {
+			appID = "无法识别"
+		}
 		return "", echo.NewHTTPError(http.StatusBadRequest,
 			fmt.Sprintf("小程序使用的 AppID（%s）与服务端配置的（%s）不一致", appID, a.cfg.WXAppID))
 	}
