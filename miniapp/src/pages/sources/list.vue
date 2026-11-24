@@ -33,7 +33,7 @@ const edit = (id?: number) => uni.navigateTo({ url: '/pages/sources/edit' + (id 
 </script>
 
 <template>
-  <view>
+  <view class="list">
     <view v-for="s in sources" :key="s.id" class="source">
       <view class="main" @click="edit(s.id)">
         <view class="name">
@@ -93,7 +93,19 @@ const edit = (id?: number) => uni.navigateTo({ url: '/pages/sources/edit' + (id 
   color: #b9770e;
 }
 
+.list {
+  // Room for the fixed footer.
+  padding-bottom: calc(160rpx + env(safe-area-inset-bottom));
+}
+
 .footer {
-  padding: 40rpx 32rpx;
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid var(--line);
+  background: var(--paper);
 }
 </style>

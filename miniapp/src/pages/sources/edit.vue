@@ -102,23 +102,24 @@ function paste() {
     </view>
     <textarea v-model="text" class="json" :maxlength="-1" auto-height :show-confirm-bar="false" />
 
-    <view class="buttons">
-      <wd-button :loading="busy" @click="save">保存</wd-button>
-      <wd-button v-if="id" plain type="error" @click="remove">删除</wd-button>
-    </view>
-
     <view class="bar"><text class="muted">测试：依次执行搜索、目录、第一章正文（不会保存）</text></view>
     <view class="test">
       <input v-model="keyword" class="keyword" placeholder="搜索关键词" />
       <wd-button size="small" plain :loading="busy" @click="test">测试</wd-button>
     </view>
     <view v-if="report" class="report">{{ report }}</view>
+
+    <view class="actions">
+      <view v-if="id" class="side"><wd-button plain type="error" @click="remove">删除</wd-button></view>
+      <view class="primary"><wd-button block :loading="busy" @click="save">保存</wd-button></view>
+    </view>
   </view>
 </template>
 
 <style lang="scss" scoped>
 .edit {
-  padding-bottom: 80rpx;
+  // Room for the fixed action bar.
+  padding-bottom: calc(160rpx + env(safe-area-inset-bottom));
 }
 
 .bar {
@@ -145,10 +146,25 @@ function paste() {
   line-height: 1.6;
 }
 
-.buttons {
+.actions {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
   display: flex;
   gap: 24rpx;
-  padding: 32rpx;
+  padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid var(--line);
+  background: var(--paper);
+
+  .side {
+    flex: none;
+  }
+
+  .primary {
+    flex: 1;
+  }
 }
 
 .test {
