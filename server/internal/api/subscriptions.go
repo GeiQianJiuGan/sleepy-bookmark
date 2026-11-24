@@ -170,7 +170,9 @@ func streamRulesFrom(r io.Reader, packed bool) ([]*source.Source, []skipped, err
 				return nil, nil, errNotRules
 			}
 			defer z.Close()
-			return streamRulesFrom(z, true)
+			// What is unpacked is bounded as a whole: a small download must not turn into
+			// endless reading. A list longer than this is cut short and refused as such.
+			return streamRulesFrom(io.LimitReader(z, maxUnpacked), true)
 		}
 		if c != '[' && c != '{' {
 			return nil, nil, errNotRules
