@@ -31,7 +31,7 @@
   "type": "novel",                // 必填，novel 或 comic
   "baseUrl": "https://example.com", // 必填
   "headers": { "User-Agent": "...", "Referer": "..." }, // 可选，抓页面和图片时都会带上
-  "charset": "gbk",               // 可选，留空自动识别
+  "charset": "gbk",               // 可选，留空自动识别；填了之后搜索词也按这个编码发送
   "rateLimitMs": 500,             // 可选，对该站两次请求的最小间隔
 
   "search": {

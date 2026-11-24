@@ -3,6 +3,7 @@ package source_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -202,6 +203,31 @@ func TestTocFallbackReadsAShortCatalog(t *testing.T) {
 		toc, err := e.Toc(context.Background(), src, src.BaseURL+page)
 		if err != nil || len(toc) != 2 || toc[0].Title != "one" || toc[1].Title != "two" {
 			t.Fatalf("%s: %+v, %v", page, toc, err)
+		}
+	}
+}
+
+// A site that is forced to GBK reads the search keyword as GBK, in the query and in a form.
+func TestSearchKeywordUsesTheSiteCharset(t *testing.T) {
+	const gbk = "%B7%B2%C8%CB" // 凡人
+	var query, form string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		query, form = r.URL.RawQuery, string(body)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<li><a href="/book/1">x</a></li>`)
+	})
+	e, src := site(t, mux)
+	src.Search.URL, src.Search.Method, src.Search.Body = "/search?q={{key}}", "POST", "s={{key}}"
+
+	for charset, want := range map[string]string{"gbk": gbk, "": "%E5%87%A1%E4%BA%BA", "no-such-charset": "%E5%87%A1%E4%BA%BA"} {
+		src.Charset = charset
+		if _, err := e.Search(context.Background(), src, "凡人", 1); err != nil {
+			t.Fatal(err)
+		}
+		if query != "q="+want || form != "s="+want {
+			t.Errorf("charset %q: query %q, form %q, want %s", charset, query, form, want)
 		}
 	}
 }
