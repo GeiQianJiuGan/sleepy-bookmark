@@ -171,6 +171,10 @@ func convertLegado(raw []byte) (*Source, bool, error) {
 				Intro:   convertLegadoExpr(plainLegado(re.Intro), false),
 				Latest:  convertLegadoExpr(plainLegado(re.LastChapter), false),
 			}
+			// A list that cannot name its books is left out; the source is still of use.
+			if src.Recommend.Title == "" || src.Recommend.URLRule == "" {
+				src.Recommend = nil
+			}
 		}
 	}
 
