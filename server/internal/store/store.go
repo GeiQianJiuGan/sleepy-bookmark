@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS sources (
 	rule       TEXT NOT NULL,
 	updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS subscriptions (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	name      TEXT NOT NULL,
+	url       TEXT NOT NULL UNIQUE,
+	synced_at INTEGER NOT NULL DEFAULT 0,
+	error     TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS books (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
 	source_id      INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
@@ -75,6 +82,16 @@ func Open(path string) (*DB, error) {
 	// A single connection keeps writes serialized and makes :memory: databases usable in tests.
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// Columns added after the first release are missing from a database created before them.
+	var has int
+	err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sources') WHERE name = 'subscription_id'`).Scan(&has)
+	if err == nil && has == 0 {
+		_, err = db.Exec(`ALTER TABLE sources ADD COLUMN subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL`)
+	}
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -132,13 +149,15 @@ type SourceRow struct {
 	Enabled   bool   `json:"enabled"`
 	Rule      string `json:"-"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// SubscriptionID is the subscription that the source was last imported from, 0 if none.
+	SubscriptionID int64 `json:"subscriptionId,omitempty"`
 }
 
-const sourceCols = `id, name, type, enabled, rule, updated_at`
+const sourceCols = `id, name, type, enabled, rule, updated_at, COALESCE(subscription_id, 0)`
 
 func scanSource(s interface{ Scan(...any) error }) (*SourceRow, error) {
 	var r SourceRow
-	err := s.Scan(&r.ID, &r.Name, &r.Type, &r.Enabled, &r.Rule, &r.UpdatedAt)
+	err := s.Scan(&r.ID, &r.Name, &r.Type, &r.Enabled, &r.Rule, &r.UpdatedAt, &r.SubscriptionID)
 	return &r, notFound(err)
 }
 
@@ -190,4 +209,91 @@ func (d *DB) SetSourceEnabled(id int64, enabled bool) error {
 func (d *DB) DeleteSource(id int64) error {
 	_, err := d.Exec(`DELETE FROM sources WHERE id = ?`, id)
 	return err
+}
+
+// ---- subscriptions ----
+
+// Subscription is a list of source rules published at a URL, imported and synced again from there.
+type Subscription struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	SyncedAt int64  `json:"syncedAt"`
+	// Error is why the last sync failed, "" if it did not.
+	Error string `json:"error"`
+	// Sources counts the sources that came from the list.
+	Sources int `json:"sources"`
+}
+
+const subscriptionCols = `id, name, url, synced_at, error,
+	(SELECT COUNT(*) FROM sources WHERE subscription_id = subscriptions.id)`
+
+func scanSubscription(s interface{ Scan(...any) error }) (*Subscription, error) {
+	var r Subscription
+	err := s.Scan(&r.ID, &r.Name, &r.URL, &r.SyncedAt, &r.Error, &r.Sources)
+	return &r, notFound(err)
+}
+
+func (d *DB) Subscriptions() ([]*Subscription, error) {
+	rows, err := d.Query(`SELECT ` + subscriptionCols + ` FROM subscriptions ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Subscription{}
+	for rows.Next() {
+		r, err := scanSubscription(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) Subscription(id int64) (*Subscription, error) {
+	return scanSubscription(d.QueryRow(`SELECT `+subscriptionCols+` FROM subscriptions WHERE id = ?`, id))
+}
+
+func (d *DB) SubscriptionByURL(url string) (*Subscription, error) {
+	return scanSubscription(d.QueryRow(`SELECT `+subscriptionCols+` FROM subscriptions WHERE url = ?`, url))
+}
+
+func (d *DB) CreateSubscription(name, url string) (int64, error) {
+	res, err := d.Exec(`INSERT INTO subscriptions (name, url) VALUES (?, ?)`, name, url)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// SetSubscriptionSynced records the outcome of a sync; errText is "" for one that worked.
+func (d *DB) SetSubscriptionSynced(id int64, errText string) error {
+	_, err := d.Exec(`UPDATE subscriptions SET synced_at = ?, error = ? WHERE id = ?`, now(), errText, id)
+	return err
+}
+
+// DeleteSubscription leaves the sources that came from it in place, as sources of their own.
+func (d *DB) DeleteSubscription(id int64) error {
+	_, err := d.Exec(`DELETE FROM subscriptions WHERE id = ?`, id)
+	return err
+}
+
+func (d *DB) SetSourceSubscription(sourceID, subscriptionID int64) error {
+	_, err := d.Exec(`UPDATE sources SET subscription_id = ? WHERE id = ?`, subscriptionID, sourceID)
+	return err
+}
+
+func (d *DB) SourcesBySubscription(id int64) ([]*SourceRow, error) {
+	all, err := d.Sources("", false)
+	if err != nil {
+		return nil, err
+	}
+	out := []*SourceRow{}
+	for _, r := range all {
+		if r.SubscriptionID == id {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }

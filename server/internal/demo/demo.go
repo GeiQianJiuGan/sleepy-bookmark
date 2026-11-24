@@ -93,14 +93,20 @@ var tpl = template.Must(template.New("").Funcs(template.FuncMap{
 		return out
 	},
 }).Parse(`
-{{define "search"}}<html><body><ul class="result">
+{{define "home"}}<html><body>
+<form action="search" method="get"><input type="text" name="q"><button type="submit">搜索</button></form>
+{{template "list" .}}</body></html>{{end}}
+
+{{define "search"}}<html><body>{{template "list" .}}</body></html>{{end}}
+
+{{define "list"}}<ul class="result">
 {{range .}}<li>
   <img src="/demo/cover/{{.ID}}.png">
   <a class="name" href="book/{{.ID}}/">{{.Title}}</a>
   <span class="author">{{.Author}}</span>
   <p class="intro">{{.Intro}}</p>
 </li>{{end}}
-</ul></body></html>{{end}}
+</ul>{{end}}
 
 {{define "book"}}<html><body>
 <div id="info"><h1>{{.Title}}</h1><p class="author">作者：{{.Author}}</p>
@@ -126,6 +132,10 @@ func Handler() http.Handler {
 
 	mux.HandleFunc("GET /demo/novel/search", func(w http.ResponseWriter, r *http.Request) {
 		tpl.ExecuteTemplate(w, "search", match(novels, r.URL.Query().Get("q")))
+	})
+	// The home page is what a source of nothing but this address is recognised from.
+	mux.HandleFunc("GET /demo/novel/{$}", func(w http.ResponseWriter, r *http.Request) {
+		tpl.ExecuteTemplate(w, "home", ranked(novels))
 	})
 	// The ranking lists every book, most chapters first.
 	mux.HandleFunc("GET /demo/novel/rank", func(w http.ResponseWriter, r *http.Request) {

@@ -46,6 +46,10 @@ func New(db *store.DB, a *auth.Auth, lib *library.Library, disk *cache.Disk) *ec
 	g.PUT("/sources/:id", s.updateSource)
 	g.PUT("/sources/:id/enabled", s.toggleSource)
 	g.DELETE("/sources/:id", s.deleteSource)
+	g.GET("/subscriptions", s.listSubscriptions)
+	g.POST("/subscriptions", s.createSubscription)
+	g.POST("/subscriptions/:id/sync", s.syncSubscription)
+	g.DELETE("/subscriptions/:id", s.deleteSubscription)
 
 	g.GET("/search", s.search)
 	g.GET("/recommend", s.recommend)

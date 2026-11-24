@@ -455,6 +455,7 @@ func (l *Library) fetchImage(ctx context.Context, sourceID int64, url string, ke
 }
 
 // TestSource runs search, toc and the first chapter of a rule without touching the database.
+// Without a keyword it takes the book to try from the rule's list of recommendations.
 func (l *Library) TestSource(ctx context.Context, src *source.Source, key string) map[string]any {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
@@ -463,12 +464,29 @@ func (l *Library) TestSource(ctx context.Context, src *source.Source, key string
 		report["failedStep"], report["error"] = step, err.Error()
 		return report
 	}
-	books, err := l.engine.Search(ctx, src, key, 1)
-	if err == nil && len(books) == 0 {
-		err = fmt.Errorf("搜索 %q 没有结果", key)
-	}
-	if err != nil {
-		return fail("search", err)
+	var books []source.BookInfo
+	if key != "" {
+		found, err := l.engine.Search(ctx, src, key, 1)
+		if err == nil && len(found) == 0 {
+			err = fmt.Errorf("搜索 %q 没有结果", key)
+		}
+		if err != nil {
+			return fail("search", err)
+		}
+		books = found
+	} else {
+		// A source that cannot be searched is of no use, whatever else works.
+		searchURL, err := l.engine.SearchURL(ctx, src)
+		if err != nil {
+			return fail("search", err)
+		}
+		report["searchUrl"] = searchURL
+		if books, err = l.engine.Recommend(ctx, src); err == nil && len(books) == 0 {
+			err = errors.New("没有在首页识别到书籍列表，请填一个搜索关键词再试")
+		}
+		if err != nil {
+			return fail("recommend", err)
+		}
 	}
 	report["searchCount"], report["book"] = len(books), books[0]
 	detail, err := l.engine.Detail(ctx, src, books[0].URL)

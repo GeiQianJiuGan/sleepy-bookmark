@@ -51,8 +51,44 @@ export interface Source {
   enabled: boolean
   updatedAt: number
   rule: Record<string, unknown>
+  /** The source has no rules of its own: the server recognises its pages. */
+  auto: boolean
+  /** The subscription the source was last imported from. */
+  subscriptionId?: number
   /** Recent failures to reach the source; null while it works. */
   health: { failures: number; lastError: string; lastErrorAt: number; pausedUntil: number } | null
+}
+
+export interface Subscription {
+  id: number
+  name: string
+  url: string
+  /** Unix seconds of the last sync that was tried. */
+  syncedAt: number
+  /** Why the last sync failed; empty when it worked. */
+  error: string
+  sources: number
+}
+
+export interface SyncResult {
+  subscription: Subscription
+  added: number
+  updated: number
+  /** Entries of the list that are not valid rules. */
+  skipped: { name: string; error: string }[]
+}
+
+/** What a trial run of a source found, up to the step that failed. */
+export interface TestReport {
+  failedStep?: 'search' | 'recommend' | 'detail' | 'toc' | 'content'
+  error?: string
+  searchUrl?: string
+  searchCount?: number
+  book?: { title: string }
+  detail?: { title: string; author: string; cover: string }
+  chapterCount?: number
+  firstChapter?: { title: string }
+  content?: { text?: string; images?: string[] }
 }
 
 export interface Task {
@@ -122,6 +158,14 @@ export const api = {
   updateSource: (id: number, rule: unknown) => request('PUT', `/sources/${id}`, rule),
   setSourceEnabled: (id: number, enabled: boolean) => request('PUT', `/sources/${id}/enabled`, { enabled }),
   deleteSource: (id: number) => request('DELETE', `/sources/${id}`),
+  /** Without a keyword the book to try comes from the source's home page or recommendations. */
   testSource: (rule: unknown, key: string) =>
-    request<Record<string, unknown>>('POST', `/sources/test?q=${q(key)}`, rule),
+    request<TestReport>('POST', key ? `/sources/test?q=${q(key)}` : '/sources/test', rule),
+
+  subscriptions: () => request<Subscription[]>('GET', '/subscriptions'),
+  /** Subscribing to a URL that is subscribed already syncs it. */
+  subscribe: (url: string) => request<SyncResult>('POST', '/subscriptions', { url }),
+  syncSubscription: (id: number) => request<SyncResult>('POST', `/subscriptions/${id}/sync`),
+  deleteSubscription: (id: number, withSources: boolean) =>
+    request('DELETE', `/subscriptions/${id}${withSources ? '?sources=1' : ''}`),
 }
