@@ -511,6 +511,24 @@ func TestAChapterOfOnePictureIsRead(t *testing.T) {
 	}
 }
 
+func TestARuleOfTheOtherTypeDoesNotStandInForTheOneThatIsWritten(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, frame, "", `<div class="reader"><img src="/thumb/1.jpg" data-full="/full/1.jpg"><img src="/thumb/2.jpg" data-full="/full/2.jpg"></div>`)
+	}))
+	defer srv.Close()
+	// A source that was a novel, made a comic with a rule for its pictures.
+	src, err := source.ParseSource([]byte(`{"name":"改了类型","type":"comic","baseUrl":"` + srv.URL + `","rateLimitMs":1,
+		"content":{"body":"auto","images":".reader img@data-full"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &source.Engine{Fetcher: source.NewFetcher()}
+	c, err := e.Content(context.Background(), src, srv.URL+"/manga/1/1.html", "")
+	if err != nil || len(c.Images) != 2 || c.Images[0] != srv.URL+"/full/1.jpg" {
+		t.Fatalf("images = %v (%v), want the two that the rule names", c.Images, err)
+	}
+}
+
 func TestPagesThatTurnWhenClickedAreReadAndNotTheBannerBesideThem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var pages strings.Builder

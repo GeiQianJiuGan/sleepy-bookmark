@@ -376,7 +376,13 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 			start = base
 		}
 		sel, _ := markup(doc)
-		auto := isAuto(src.Content.Body) || isAuto(src.Content.Images)
+		// Only the rule of the source's own type counts: a source that changed type may still
+		// carry the other one.
+		rule := src.Content.Body
+		if src.Type == TypeComic {
+			rule = src.Content.Images
+		}
+		auto := isAuto(rule)
 		switch {
 		case auto && sel == nil:
 			return c, RuleError(noAuto)
