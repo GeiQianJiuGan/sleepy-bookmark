@@ -40,7 +40,8 @@ async function loadHome() {
   if (mode !== store.mode) return
   if (list) {
     sources.value = list.filter((s) => s.enabled)
-    if (!sources.value.some((s) => s.id === sourceId.value)) sourceId.value = 0
+    // The source that was searched is gone, and so are its books.
+    if (sourceId.value && !sources.value.some((s) => s.id === sourceId.value)) pickSource(0)
   }
   await Promise.all(
     sources.value
