@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -121,5 +122,24 @@ func TestPaginationStopsAtARedirectedPageItAlreadyRead(t *testing.T) {
 	toc, err := e.Toc(context.Background(), src, src.BaseURL+"/toc")
 	if err != nil || len(toc) != 2 {
 		t.Fatalf("toc: %+v, %v", toc, err)
+	}
+}
+
+func TestComicPagesDoNotRepeatImages(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/c/1", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><img src="/i/1.jpg"><img src="/i/2.jpg"><a id="next" href="/c/1_2">next</a></body></html>`))
+	})
+	mux.HandleFunc("/c/1_2", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><img src="/i/2.jpg"><img src="/i/3.jpg"></body></html>`))
+	})
+	e, src := site(t, mux)
+	src.Type = source.TypeComic
+	src.Content = source.ContentRule{Images: "css:img@src", NextPage: "css:#next@href"}
+
+	c, err := e.Content(context.Background(), src, src.BaseURL+"/c/1", "")
+	want := []string{src.BaseURL + "/i/1.jpg", src.BaseURL + "/i/2.jpg", src.BaseURL + "/i/3.jpg"}
+	if err != nil || !slices.Equal(c.Images, want) {
+		t.Fatalf("images: %v, %v", c.Images, err)
 	}
 }

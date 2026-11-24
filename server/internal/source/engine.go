@@ -6,6 +6,7 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -161,8 +162,11 @@ func (e *Engine) Content(ctx context.Context, src *Source, chapterURL, stopURL s
 		}
 		seen[base] = true
 		if src.Type == TypeComic {
+			// Sites that split a chapter over pages repeat the last images on the next page.
 			for _, img := range doc.Values(src.Content.Images) {
-				c.Images = append(c.Images, resolve(base, img))
+				if img = resolve(base, img); !slices.Contains(c.Images, img) {
+					c.Images = append(c.Images, img)
+				}
 			}
 		} else {
 			body := src.Content.Body
