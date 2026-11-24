@@ -70,6 +70,9 @@ type TocRule struct {
 	URL      string `json:"url"`
 	NextPage string `json:"nextPage,omitempty"`
 	Reverse  bool   `json:"reverse,omitempty"`
+	// Fallback is tried when the rule finds no chapter: some sites lay out a short catalog
+	// differently from a long one.
+	Fallback *TocRule `json:"fallback,omitempty"`
 }
 
 type ContentRule struct {
@@ -106,6 +109,8 @@ func (s *Source) Validate() error {
 		return errors.New("recommend 需要 url / list / title / bookUrl")
 	case s.Toc.List == "" || s.Toc.URL == "":
 		return errors.New("toc 需要 list / url")
+	case s.Toc.Fallback != nil && (s.Toc.Fallback.List == "" || s.Toc.Fallback.URL == ""):
+		return errors.New("toc.fallback 需要 list / url")
 	case s.Type == TypeNovel && s.Content.Body == "":
 		return errors.New("小说源需要 content.body")
 	case s.Type == TypeComic && s.Content.Images == "":

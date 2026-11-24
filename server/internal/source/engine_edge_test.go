@@ -183,3 +183,25 @@ func TestContentStopsAtARedirectToAPageItAlreadyRead(t *testing.T) {
 		t.Fatalf("images before the next chapter: %v, %v", c.Images, err)
 	}
 }
+
+func TestTocFallbackReadsAShortCatalog(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/long", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<div class="latest"><a href="/c/2">two</a></div><div id="list"><a href="/c/1">one</a><a href="/c/2">two</a></div>`))
+	})
+	mux.HandleFunc("/short", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<div class="latest"><a href="/c/2">two</a><a href="/c/1">one</a></div>`))
+	})
+	e, src := site(t, mux)
+	src.Toc.Fallback = &source.TocRule{List: "css:.latest a", Name: "@text", URL: "@href", Reverse: true}
+	if err := src.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, page := range []string{"/long", "/short"} {
+		toc, err := e.Toc(context.Background(), src, src.BaseURL+page)
+		if err != nil || len(toc) != 2 || toc[0].Title != "one" || toc[1].Title != "two" {
+			t.Fatalf("%s: %+v, %v", page, toc, err)
+		}
+	}
+}

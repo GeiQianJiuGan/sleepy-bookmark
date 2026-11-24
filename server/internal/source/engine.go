@@ -114,7 +114,22 @@ func (e *Engine) Detail(ctx context.Context, src *Source, bookURL string) (BookI
 	return b, nil
 }
 
+// Toc reads the chapter list with the toc rule, and with its fallback when that finds nothing.
 func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]ChapterInfo, error) {
+	out, err := e.toc(ctx, src, src.Toc, tocURL)
+	if err == nil && len(out) == 0 && src.Toc.Fallback != nil {
+		out, err = e.toc(ctx, src, *src.Toc.Fallback, tocURL)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, RuleError("目录为空，请检查 toc 规则")
+	}
+	return out, nil
+}
+
+func (e *Engine) toc(ctx context.Context, src *Source, rule TocRule, tocURL string) ([]ChapterInfo, error) {
 	var out []ChapterInfo
 	seen := map[string]bool{}
 	for u, n := tocURL, 0; u != "" && !seen[u]; n++ {
@@ -127,21 +142,16 @@ func (e *Engine) Toc(ctx context.Context, src *Source, tocURL string) ([]Chapter
 			return nil, err
 		}
 		seen[base] = true // a later link may name this page by the address it redirected to
-		for _, item := range doc.Find(src.Toc.List) {
-			c := ChapterInfo{Title: first(item, src.Toc.Name), URL: resolve(base, first(item, src.Toc.URL))}
+		for _, item := range doc.Find(rule.List) {
+			c := ChapterInfo{Title: first(item, rule.Name), URL: resolve(base, first(item, rule.URL))}
 			if c.URL != "" {
 				out = append(out, c)
 			}
 		}
-		u = resolve(base, first(doc, src.Toc.NextPage))
+		u = resolve(base, first(doc, rule.NextPage))
 	}
-	if len(out) == 0 {
-		return nil, RuleError("目录为空，请检查 toc 规则")
-	}
-	if src.Toc.Reverse {
-		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-			out[i], out[j] = out[j], out[i]
-		}
+	if rule.Reverse {
+		slices.Reverse(out)
 	}
 	return out, nil
 }

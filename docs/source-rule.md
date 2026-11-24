@@ -62,7 +62,8 @@
     "name": "@text",
     "url": "@href",               // 必填
     "nextPage": "",               // 可选，目录分页的下一页地址
-    "reverse": false              // 可选，站点目录是倒序时设为 true
+    "reverse": false,             // 可选，站点目录是倒序时设为 true
+    "fallback": null              // 可选，另一组 list / name / url / reverse；上面的规则一章都没找到时改用它
   },
 
   "content": {
