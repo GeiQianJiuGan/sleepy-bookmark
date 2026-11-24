@@ -158,9 +158,12 @@ export const api = {
   updateSource: (id: number, rule: unknown) => request('PUT', `/sources/${id}`, rule),
   setSourceEnabled: (id: number, enabled: boolean) => request('PUT', `/sources/${id}/enabled`, { enabled }),
   deleteSource: (id: number) => request('DELETE', `/sources/${id}`),
-  /** Without a keyword the book to try comes from the source's home page or recommendations. */
-  testSource: (rule: unknown, key: string) =>
-    request<TestReport>('POST', key ? `/sources/test?q=${q(key)}` : '/sources/test', rule),
+  /**
+   * Without a keyword the book to try comes from the source's home page or recommendations.
+   * The id of the source that the rule is an edit of has it read the way that source is.
+   */
+  testSource: (rule: unknown, key: string, id = 0) =>
+    request<TestReport>('POST', `/sources/test?id=${id || ''}&q=${q(key)}`, rule),
 
   subscriptions: () => request<Subscription[]>('GET', '/subscriptions'),
   /** Subscribing to a URL that is subscribed already syncs it. */

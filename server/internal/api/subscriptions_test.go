@@ -316,4 +316,14 @@ func TestASourceOfAListKeepsToPublicAddressesOnceUnsubscribed(t *testing.T) {
 	if len(found.Books) != 0 || len(found.Errors) != 1 || !strings.Contains(found.Errors[0].Error, "公网") {
 		t.Fatalf("search of the kept source: %+v", found)
 	}
+	// An edit of it is tried out under the same terms, and one of a new source is not.
+	for id, refused := range map[string]bool{fmt.Sprint(kept.ID): true, "": false} {
+		var report struct{ FailedStep, Error string }
+		if code := c.do("POST", "/api/sources/test?q=%E6%98%9F%E6%B2%B3&id="+id, rule, &report); code != 200 {
+			t.Fatalf("test with id %q: %d", id, code)
+		}
+		if strings.Contains(report.Error, "公网") != refused || (report.FailedStep != "") != refused {
+			t.Errorf("test with id %q: %+v, refused should be %v", id, report, refused)
+		}
+	}
 }

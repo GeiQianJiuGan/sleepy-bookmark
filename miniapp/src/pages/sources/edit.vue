@@ -107,7 +107,7 @@ async function tryOut(): Promise<TestReport> {
   testing.value = true
   report.value = null
   try {
-    report.value = await api.testSource(rule(), keyword.value.trim())
+    report.value = await api.testSource(rule(), keyword.value.trim(), id)
     return report.value
   } finally {
     testing.value = false

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -265,6 +266,18 @@ func (s *Server) testSource(c echo.Context) error {
 	key := c.QueryParam("q")
 	if key == "" && rules[0].Recommend == nil {
 		return badRequest("缺少搜索关键词 q")
+	}
+	// A rule tried out for a source of a subscribed list is read as that source is.
+	if id := c.QueryParam("id"); id != "" {
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return badRequest("无效的 id")
+		}
+		row, err := s.db.Source(n)
+		if err != nil {
+			return err
+		}
+		rules[0].Public = row.Listed
 	}
 	return c.JSON(http.StatusOK, s.lib.TestSource(c.Request().Context(), rules[0], key))
 }
