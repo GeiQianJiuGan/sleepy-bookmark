@@ -267,7 +267,7 @@ func legadoImages(expr string) string {
 		return expr
 	}
 	// The last step already names the pictures when it is an img tag, not a class with img in it.
-	if f := strings.Fields(strings.TrimPrefix(sel, "css:")); len(f) > 0 && strings.Contains(f[len(f)-1], "img") && !strings.ContainsAny(f[len(f)-1], ".#") {
+	if f := strings.Fields(strings.TrimPrefix(sel, "css:")); len(f) > 0 && reImgTag.MatchString(f[len(f)-1]) {
 		return sel + "@src"
 	}
 	return sel + " img@src"
@@ -316,6 +316,9 @@ func firstLegadoExploreURL(s string) string {
 	}
 	return ""
 }
+
+// reImgTag is a last selector step that is a picture itself: img, img.page, amp-img, div>img.
+var reImgTag = regexp.MustCompile(`(^|[>+~-])img([.#\[:]|$)`)
 
 var reLegadoIndex = regexp.MustCompile(`\.(-?\d+)$`)
 
