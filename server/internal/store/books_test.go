@@ -117,3 +117,30 @@ func TestReplaceTocKeepsChapterIDsByURL(t *testing.T) {
 		t.Fatalf("stale = %v, want [%d]", stale, first["b"])
 	}
 }
+
+// A cached chapter was read up to the next chapter's URL. When the source later lists a
+// chapter in between, the cached text may run into that chapter and must be read again.
+func TestReplaceTocDropsCacheWhenTheNextChapterChanges(t *testing.T) {
+	db, bookID := newBook(t)
+	if _, err := db.ReplaceToc(bookID, entries("a", "c")); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := db.Chapters(bookID)
+	for _, c := range before {
+		if err := db.SetChapterCached(c.ID, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stale, err := db.ReplaceToc(bookID, entries("a", "b", "c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := db.Chapters(bookID)
+	if after[0].ID != before[0].ID || after[0].Cached || !slices.Equal(stale, []int64{before[0].ID}) {
+		t.Fatalf("chapter a: %+v, stale %v", after[0], stale)
+	}
+	if after[2].ID != before[1].ID || !after[2].Cached {
+		t.Fatalf("chapter c should keep its cache: %+v", after[2])
+	}
+}

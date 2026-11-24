@@ -140,6 +140,12 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 	}
 	pair(func(_, url string) string { return url })
 	pair(func(title, _ string) string { return title })
+	// A chapter's content is read up to the URL of the chapter after it (see Engine.Content),
+	// so it has to be read again when a different chapter follows it.
+	oldNext := map[int64]string{}
+	for i, c := range old[:max(len(old)-1, 0)] {
+		oldNext[c.ID] = old[i+1].URL
+	}
 
 	tx, err := d.Begin()
 	if err != nil {
@@ -152,7 +158,11 @@ func (d *DB) ReplaceToc(bookID int64, toc []TocEntry) (stale []int64, err error)
 	}
 	for i, t := range toc {
 		if m := match[i]; m != nil {
-			cached := m.Cached && m.URL == t.URL
+			next := ""
+			if i+1 < len(toc) {
+				next = toc[i+1].URL
+			}
+			cached := m.Cached && m.URL == t.URL && oldNext[m.ID] == next
 			if m.Cached && !cached {
 				stale = append(stale, m.ID)
 			}
