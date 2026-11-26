@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,12 +27,16 @@ import (
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/library"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/source"
 	"github.com/GeiQianJiuGan/sleepy-bookmark/server/internal/store"
+	"github.com/golang-jwt/jwt/v5"
 )
+
+const testJWTSecret = "api-test-secret"
 
 type client struct {
 	t     *testing.T
 	base  string
 	token string
+	db    *store.DB
 	// site is the demo site that the seeded sources point at.
 	site *httptest.Server
 	lib  *library.Library
@@ -265,6 +270,9 @@ func newClient(t *testing.T, cfg config.Config) *client {
 	t.Cleanup(site.Close)
 
 	cfg.DataDir = t.TempDir()
+	if cfg.JWTSecret == "" {
+		cfg.JWTSecret = testJWTSecret
+	}
 	db, err := store.Open(filepath.Join(cfg.DataDir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -284,8 +292,145 @@ func newClient(t *testing.T, cfg config.Config) *client {
 	}
 	srv := httptest.NewServer(api.New(db, a, lib, disk))
 	t.Cleanup(srv.Close)
-	c.base, c.site, c.lib, c.dir = srv.URL, site, lib, cfg.DataDir
+	c.base, c.site, c.lib, c.dir, c.db = srv.URL, site, lib, cfg.DataDir, db
 	return c
+}
+
+func withUser(c *client, openid string) *client {
+	c.t.Helper()
+	user, err := c.db.CreateUser(openid)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	claims := jwt.RegisteredClaims{
+		Subject:   strconv.FormatInt(user.ID, 10),
+		Audience:  jwt.ClaimStrings{"access"},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testJWTSecret))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return &client{
+		t: c.t, base: c.base, token: token, site: c.site, lib: c.lib, dir: c.dir, db: c.db,
+	}
+}
+
+func TestUserIsolationAndDefaultAdmin(t *testing.T) {
+	base := newClient(t, config.Config{})
+	owner := withUser(base, "owner")
+	friend := withUser(base, "friend")
+
+	var found searchResult
+	if code := owner.do("GET", qStar, nil, &found); code != http.StatusOK || len(found.Books) == 0 {
+		t.Fatalf("search: status %d, result %+v", code, found)
+	}
+	bookID := found.Books[0].ID
+	var chapters []struct{ ID int64 }
+	if code := owner.do("GET", "/api/books/"+itoa(bookID)+"/chapters", nil, &chapters); code != http.StatusOK || len(chapters) == 0 {
+		t.Fatalf("chapters: status %d, count %d", code, len(chapters))
+	}
+	if code := owner.do("PUT", "/api/favorites/"+itoa(bookID), nil, nil); code != http.StatusNoContent {
+		t.Fatalf("add favorite: %d", code)
+	}
+	if code := owner.do("PUT", "/api/history", map[string]any{"chapterId": chapters[0].ID, "position": 42}, nil); code != http.StatusNoContent {
+		t.Fatalf("save history: %d", code)
+	}
+	var favorites, history []struct{ ID int64 }
+	if code := friend.do("GET", "/api/favorites", nil, &favorites); code != http.StatusOK || len(favorites) != 0 {
+		t.Fatalf("friend favorites: status %d, list %+v", code, favorites)
+	}
+	if code := friend.do("GET", "/api/history", nil, &history); code != http.StatusOK || len(history) != 0 {
+		t.Fatalf("friend history: status %d, list %+v", code, history)
+	}
+
+	var ownerMe, friendMe struct {
+		ID    int64
+		Admin bool
+	}
+	owner.do("GET", "/api/me", nil, &ownerMe)
+	friend.do("GET", "/api/me", nil, &friendMe)
+	if ownerMe.ID == 0 || !ownerMe.Admin || friendMe.ID == 0 || friendMe.Admin {
+		t.Fatalf("me owner=%+v friend=%+v", ownerMe, friendMe)
+	}
+	var users []struct {
+		ID        int64
+		OpenID    string
+		CreatedAt int64
+		Admin     bool
+		Favorites int
+		History   int
+	}
+	if code := friend.do("GET", "/api/users", nil, &users); code != http.StatusForbidden {
+		t.Fatalf("friend users: %d, want 403", code)
+	}
+	if code := owner.do("GET", "/api/users", nil, &users); code != http.StatusOK || len(users) != 2 {
+		t.Fatalf("owner users: status %d, list %+v", code, users)
+	}
+	if users[0].OpenID != "owner" || !users[0].Admin || users[0].Favorites != 1 || users[0].History != 1 ||
+		users[1].OpenID != "friend" || users[1].Admin || users[1].Favorites != 0 || users[1].History != 0 {
+		t.Fatalf("user summaries: %+v", users)
+	}
+
+	var ownerTask struct{ ID int64 }
+	if code := owner.do("POST", "/api/books/"+itoa(bookID)+"/cache", nil, &ownerTask); code != http.StatusOK || ownerTask.ID == 0 {
+		t.Fatalf("queue owner cache: status %d, task %+v", code, ownerTask)
+	}
+	var tasks []struct{ ID int64 }
+	if code := friend.do("GET", "/api/tasks", nil, &tasks); code != http.StatusOK || len(tasks) != 0 {
+		t.Fatalf("friend tasks before joining: status %d, tasks %+v", code, tasks)
+	}
+	var friendTask struct{ ID int64 }
+	if code := friend.do("POST", "/api/books/"+itoa(bookID)+"/cache", nil, &friendTask); code != http.StatusOK || friendTask.ID != ownerTask.ID {
+		t.Fatalf("join cache task: status %d, task %+v, owner task %+v", code, friendTask, ownerTask)
+	}
+	if code := friend.do("GET", "/api/tasks", nil, &tasks); code != http.StatusOK || len(tasks) != 1 || tasks[0].ID != ownerTask.ID {
+		t.Fatalf("friend tasks after joining: status %d, tasks %+v", code, tasks)
+	}
+
+	var sourceList []sourceInfo
+	owner.do("GET", "/api/sources?type=novel", nil, &sourceList)
+	rule := sourceList[0].Rule
+	rule["name"] = "owner-added-source"
+	if code := friend.do("POST", "/api/sources", rule, nil); code != http.StatusForbidden {
+		t.Fatalf("friend create source: %d, want 403", code)
+	}
+	if code := owner.do("POST", "/api/sources", rule, nil); code != http.StatusOK {
+		t.Fatalf("owner create source: %d, want 200", code)
+	}
+	subID, err := base.db.CreateSubscription("test", "https://example.invalid/list.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subPath := "/api/subscriptions/" + itoa(subID)
+	if code := friend.do("DELETE", subPath, nil, nil); code != http.StatusForbidden {
+		t.Fatalf("friend delete subscription: %d, want 403", code)
+	}
+	if code := owner.do("DELETE", subPath, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("owner delete subscription: %d, want 204", code)
+	}
+}
+
+func TestConfiguredAdminOpenIDsOverrideEarliestUser(t *testing.T) {
+	base := newClient(t, config.Config{AdminOpenIDs: []string{"friend"}})
+	owner := withUser(base, "owner")
+	friend := withUser(base, "friend")
+	var ownerMe, friendMe struct{ Admin bool }
+	owner.do("GET", "/api/me", nil, &ownerMe)
+	friend.do("GET", "/api/me", nil, &friendMe)
+	if ownerMe.Admin || !friendMe.Admin {
+		t.Fatalf("admin flags owner=%+v friend=%+v", ownerMe, friendMe)
+	}
+	var sources []sourceInfo
+	friend.do("GET", "/api/sources?type=novel", nil, &sources)
+	rule := sources[0].Rule
+	rule["name"] = "friend-added-source"
+	if code := owner.do("POST", "/api/sources", rule, nil); code != http.StatusForbidden {
+		t.Fatalf("earliest user create source: %d, want 403", code)
+	}
+	if code := friend.do("POST", "/api/sources", rule, nil); code != http.StatusOK {
+		t.Fatalf("configured admin create source: %d, want 200", code)
+	}
 }
 
 func TestReadingFlow(t *testing.T) {

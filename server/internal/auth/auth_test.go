@@ -86,6 +86,43 @@ func TestOnlyFirstAccountRegistersWithoutWhitelist(t *testing.T) {
 	if n, _ := a.db.UserCount(); n != 1 || ok.Load() != 1 {
 		t.Fatalf("got %d users and %d successful logins, want 1 and 1", n, ok.Load())
 	}
+	if _, err := a.Login(context.Background(), "another-openid", ""); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("second openid login = %v, want forbidden", err)
+	}
+}
+
+func TestOpenRegistrationAllowsMultipleAccounts(t *testing.T) {
+	fakeWeChat(t)
+	a := newAuth(t, config.Config{OpenRegistration: true})
+
+	var ids []int64
+	for _, openid := range []string{"alice", "bob", "carol"} {
+		if _, err := a.Login(context.Background(), openid, ""); err != nil {
+			t.Fatalf("login %q: %v", openid, err)
+		}
+		user, err := a.db.UserByOpenID(openid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, user.ID)
+	}
+	if ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
+		t.Fatalf("account IDs are not distinct: %v", ids)
+	}
+}
+
+func TestWhitelistOverridesOpenRegistration(t *testing.T) {
+	fakeWeChat(t)
+	a := newAuth(t, config.Config{
+		OpenRegistration: true,
+		OpenIDWhitelist:  []string{"allowed"},
+	})
+	if _, err := a.Login(context.Background(), "allowed", ""); err != nil {
+		t.Fatalf("whitelisted login: %v", err)
+	}
+	if _, err := a.Login(context.Background(), "not-allowed", ""); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("unlisted login = %v, want forbidden", err)
+	}
 }
 
 func TestTokenStopsWorkingWhenRemovedFromWhitelist(t *testing.T) {

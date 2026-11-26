@@ -133,20 +133,54 @@ func notFound(err error) error {
 // ---- users ----
 
 type User struct {
-	ID     int64  `json:"id"`
-	OpenID string `json:"-"`
+	ID        int64  `json:"id"`
+	OpenID    string `json:"-"`
+	CreatedAt int64  `json:"-"`
+}
+
+type UserSummary struct {
+	ID        int64
+	OpenID    string
+	CreatedAt int64
+	Favorites int
+	History   int
 }
 
 func (d *DB) UserByOpenID(openid string) (*User, error) {
 	u := User{OpenID: openid}
-	err := d.QueryRow(`SELECT id FROM users WHERE openid = ?`, openid).Scan(&u.ID)
+	err := d.QueryRow(`SELECT id, created_at FROM users WHERE openid = ?`, openid).Scan(&u.ID, &u.CreatedAt)
 	return &u, notFound(err)
 }
 
 func (d *DB) User(id int64) (*User, error) {
 	u := User{ID: id}
-	err := d.QueryRow(`SELECT openid FROM users WHERE id = ?`, id).Scan(&u.OpenID)
+	err := d.QueryRow(`SELECT openid, created_at FROM users WHERE id = ?`, id).Scan(&u.OpenID, &u.CreatedAt)
 	return &u, notFound(err)
+}
+
+func (d *DB) EarliestUserID() (id int64, err error) {
+	err = d.QueryRow(`SELECT COALESCE(MIN(id), 0) FROM users`).Scan(&id)
+	return
+}
+
+func (d *DB) Users() ([]UserSummary, error) {
+	rows, err := d.Query(`SELECT u.id, u.openid, u.created_at,
+		(SELECT COUNT(*) FROM favorites WHERE user_id = u.id),
+		(SELECT COUNT(*) FROM history WHERE user_id = u.id)
+		FROM users u ORDER BY u.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserSummary{}
+	for rows.Next() {
+		var u UserSummary
+		if err := rows.Scan(&u.ID, &u.OpenID, &u.CreatedAt, &u.Favorites, &u.History); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 func (d *DB) UserCount() (n int, err error) {

@@ -593,7 +593,7 @@ func (l *Library) AddFavorite(ctx context.Context, userID, bookID int64) error {
 		return err
 	}
 	if b.Type == source.TypeComic {
-		if _, err := l.CacheBook(ctx, bookID); err != nil {
+		if _, err := l.CacheBook(ctx, userID, bookID); err != nil {
 			log.Printf("save favorite %q: %v", b.Title, err)
 		}
 	}
