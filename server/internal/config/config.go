@@ -18,6 +18,10 @@ type Config struct {
 	WXAppID         string
 	WXSecret        string
 	OpenIDWhitelist []string
+	// OpenRegistration lets anyone with a valid wx.login code register; only people who can open
+	// the mini program can get such a code, and the 体验版 opens only for testers added in WeChat.
+	OpenRegistration bool
+	AdminOpenIDs     []string
 	// DevLogin skips WeChat code2session and logs every client in as one fixed user.
 	DevLogin bool
 	// DemoSource mounts a built-in fake novel/comic site under /demo and seeds two sources for it.
@@ -36,34 +40,42 @@ type Config struct {
 
 func Load() Config {
 	c := Config{
-		Addr:            env("ADDR", ":8080"),
-		TLSAddr:         os.Getenv("TLS_ADDR"),
-		TLSCert:         os.Getenv("TLS_CERT"),
-		TLSKey:          os.Getenv("TLS_KEY"),
-		DataDir:         env("DATA_DIR", "./data"),
-		JWTSecret:       os.Getenv("JWT_SECRET"),
-		WXAppID:         os.Getenv("WX_APPID"),
-		WXSecret:        os.Getenv("WX_SECRET"),
-		DevLogin:        envBool("DEV_LOGIN"),
-		DemoSource:      envBool("DEMO_SOURCE"),
-		SourcesFeedFile: strings.TrimSpace(os.Getenv("SOURCES_FEED_FILE")),
-		SeedSourcesFile: strings.TrimSpace(os.Getenv("SEED_SOURCES_FILE")),
-		PublicURL:       strings.TrimRight(os.Getenv("PUBLIC_URL"), "/"),
-		PrefetchAhead:   envInt("PREFETCH_AHEAD", 5),
-		RefreshInterval: time.Duration(envInt("REFRESH_INTERVAL_MINUTES", 180)) * time.Minute,
-		ImgCacheMaxMB:   int64(envInt("IMG_CACHE_MAX_MB", 2048)),
-		KeptMaxMB:       int64(envInt("KEPT_MAX_MB", 10240)),
+		Addr:             env("ADDR", ":8080"),
+		TLSAddr:          os.Getenv("TLS_ADDR"),
+		TLSCert:          os.Getenv("TLS_CERT"),
+		TLSKey:           os.Getenv("TLS_KEY"),
+		DataDir:          env("DATA_DIR", "./data"),
+		JWTSecret:        os.Getenv("JWT_SECRET"),
+		WXAppID:          os.Getenv("WX_APPID"),
+		WXSecret:         os.Getenv("WX_SECRET"),
+		OpenRegistration: envBool("OPEN_REGISTRATION"),
+		DevLogin:         envBool("DEV_LOGIN"),
+		DemoSource:       envBool("DEMO_SOURCE"),
+		SourcesFeedFile:  strings.TrimSpace(os.Getenv("SOURCES_FEED_FILE")),
+		SeedSourcesFile:  strings.TrimSpace(os.Getenv("SEED_SOURCES_FILE")),
+		PublicURL:        strings.TrimRight(os.Getenv("PUBLIC_URL"), "/"),
+		PrefetchAhead:    envInt("PREFETCH_AHEAD", 5),
+		RefreshInterval:  time.Duration(envInt("REFRESH_INTERVAL_MINUTES", 180)) * time.Minute,
+		ImgCacheMaxMB:    int64(envInt("IMG_CACHE_MAX_MB", 2048)),
+		KeptMaxMB:        int64(envInt("KEPT_MAX_MB", 10240)),
 	}
-	for _, id := range strings.Split(os.Getenv("OPENID_WHITELIST"), ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			c.OpenIDWhitelist = append(c.OpenIDWhitelist, id)
-		}
-	}
+	c.OpenIDWhitelist = envList("OPENID_WHITELIST")
+	c.AdminOpenIDs = envList("ADMIN_OPENIDS")
 	if c.PublicURL == "" {
 		port := c.Addr[strings.LastIndex(c.Addr, ":")+1:]
 		c.PublicURL = "http://127.0.0.1:" + port
 	}
 	return c
+}
+
+func envList(k string) []string {
+	var out []string
+	for _, id := range strings.Split(os.Getenv(k), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func env(k, def string) string {

@@ -216,7 +216,7 @@ func (s *Server) cacheBook(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	t, err := s.lib.CacheBook(c.Request().Context(), id)
+	t, err := s.lib.CacheBook(c.Request().Context(), auth.UserID(c), id)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func (s *Server) cacheBook(c echo.Context) error {
 }
 
 func (s *Server) tasks(c echo.Context) error {
-	return c.JSON(http.StatusOK, s.lib.Tasks())
+	return c.JSON(http.StatusOK, s.lib.Tasks(auth.UserID(c)))
 }
 
 func (s *Server) favorites(c echo.Context) error {

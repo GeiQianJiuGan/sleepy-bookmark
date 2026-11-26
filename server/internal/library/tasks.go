@@ -13,32 +13,48 @@ const maxTasks = 50
 
 // Task is a whole-book cache job.
 type Task struct {
-	ID     int64  `json:"id"`
-	BookID int64  `json:"bookId"`
-	Title  string `json:"title"`
-	Status string `json:"status"` // queued / running / done / failed
-	Total  int    `json:"total"`
-	Done   int    `json:"done"`
-	Failed int    `json:"failed"`
-	Error  string `json:"error,omitempty"`
+	ID      int64  `json:"id"`
+	BookID  int64  `json:"bookId"`
+	Title   string `json:"title"`
+	Status  string `json:"status"` // queued / running / done / failed
+	Total   int    `json:"total"`
+	Done    int    `json:"done"`
+	Failed  int    `json:"failed"`
+	Error   string `json:"error,omitempty"`
+	userIDs map[int64]struct{}
 }
 
 // CacheBook queues a job that caches every chapter of a book on the server.
-func (l *Library) CacheBook(ctx context.Context, bookID int64) (*Task, error) {
+func (l *Library) CacheBook(ctx context.Context, userID, bookID int64) (*Task, error) {
 	b, err := l.Book(ctx, bookID)
 	if err != nil {
 		return nil, err
+	}
+	userIDs := map[int64]struct{}{}
+	if userID == 0 {
+		ids, err := l.db.FavoriteUserIDs(bookID)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			userIDs[id] = struct{}{}
+		}
+	} else {
+		userIDs[userID] = struct{}{}
 	}
 	l.taskMu.Lock()
 	defer l.taskMu.Unlock()
 	for _, t := range l.tasks {
 		if t.BookID == bookID && (t.Status == "queued" || t.Status == "running") {
+			for id := range userIDs {
+				t.userIDs[id] = struct{}{}
+			}
 			snap := *t
 			return &snap, nil
 		}
 	}
 	l.taskID++
-	t := &Task{ID: l.taskID, BookID: bookID, Title: b.Title, Status: "queued"}
+	t := &Task{ID: l.taskID, BookID: bookID, Title: b.Title, Status: "queued", userIDs: userIDs}
 	select {
 	case l.queue <- t:
 	default:
@@ -52,13 +68,16 @@ func (l *Library) CacheBook(ctx context.Context, bookID int64) (*Task, error) {
 	return &snap, nil
 }
 
-// Tasks returns a snapshot of recent cache jobs, newest first.
-func (l *Library) Tasks() []Task {
+// Tasks returns a snapshot of recent cache jobs for a user, newest first.
+func (l *Library) Tasks(userID int64) []Task {
 	l.taskMu.Lock()
 	defer l.taskMu.Unlock()
 	out := make([]Task, 0, len(l.tasks))
 	for i := len(l.tasks) - 1; i >= 0; i-- {
-		out = append(out, *l.tasks[i])
+		t := l.tasks[i]
+		if _, ok := t.userIDs[userID]; ok {
+			out = append(out, *t)
+		}
 	}
 	return out
 }

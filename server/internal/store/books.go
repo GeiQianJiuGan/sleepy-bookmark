@@ -294,6 +294,23 @@ func (d *DB) Favorited(bookID int64) bool {
 	return d.QueryRow(`SELECT 1 FROM favorites WHERE book_id = ? LIMIT 1`, bookID).Scan(&n) == nil
 }
 
+func (d *DB) FavoriteUserIDs(bookID int64) ([]int64, error) {
+	rows, err := d.Query(`SELECT user_id FROM favorites WHERE book_id = ?`, bookID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // FavoriteBookIDs returns every book that at least one user has in their favorites.
 func (d *DB) FavoriteBookIDs() ([]int64, error) {
 	rows, err := d.Query(`SELECT DISTINCT book_id FROM favorites`)

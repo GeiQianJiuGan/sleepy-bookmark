@@ -64,6 +64,8 @@ cd miniapp && npm run type-check && npm run build:mp-weixin
 | `PUBLIC_URL` | `http://127.0.0.1:<端口>` | 后端的对外地址，演示书源用它拼地址 |
 | `WX_APPID` / `WX_SECRET` | 空 | 小程序凭据，用于 `wx.login` 换 openid |
 | `OPENID_WHITELIST` | 空 | 允许登录的 openid，逗号分隔。留空时只有第一个登录的微信号能用 |
+| `OPEN_REGISTRATION` | `false` | 允许有有效微信登录凭证的账号注册；`OPENID_WHITELIST` 非空时仍只允许白名单账号 |
+| `ADMIN_OPENIDS` | 空 | 管理员 openid，逗号分隔。留空时第一个用户为管理员 |
 | `JWT_SECRET` | 自动生成 | 留空则生成后保存在 `DATA_DIR/jwt.secret` |
 | `DEV_LOGIN` | `false` | 跳过微信登录，所有请求都是同一个用户。只用于本地开发 |
 | `DEMO_SOURCE` | `false` | 挂载内置演示站点和书源 |
@@ -159,7 +161,7 @@ docker compose up -d --build
 
 - 规则引擎不执行 JavaScript，也不处理登录、验证码和人机验证。需要这些才能访问的页面不支持，会提示「访问验证」，不会尝试绕过。
 - 后端只带虚构的演示书源（`DEMO_SOURCE=true`）。实际使用的书源需要使用者按 [docs/source-rule.md](docs/source-rule.md) 自行编写；来源页面改版后规则需要跟着调整。
-- 小程序没有上架，按体验版自用设计：登录默认只允许第一个登录的微信号（或 `OPENID_WHITELIST` 里的账号）。
+- 小程序没有上架，按体验版自用设计：登录默认只允许第一个登录的微信号（或 `OPENID_WHITELIST` 里的账号）；体验版只对微信后台添加的体验者开放，因此也可以通过 `OPEN_REGISTRATION=true` 允许这些体验者各自注册。
 
 ## 隐私
 

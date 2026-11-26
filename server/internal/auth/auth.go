@@ -164,7 +164,7 @@ func (a *Auth) whitelisted(openid string) bool {
 	return a.cfg.DevLogin || len(a.cfg.OpenIDWhitelist) == 0 || slices.Contains(a.cfg.OpenIDWhitelist, openid)
 }
 
-// mayRegister: with a whitelist only listed openids may join; without one only the very first user may.
+// mayRegister: a whitelist takes precedence; otherwise registration is open or limited to the first user.
 func (a *Auth) mayRegister(openid string) bool {
 	if a.cfg.DevLogin {
 		return true
@@ -172,8 +172,37 @@ func (a *Auth) mayRegister(openid string) bool {
 	if len(a.cfg.OpenIDWhitelist) > 0 {
 		return slices.Contains(a.cfg.OpenIDWhitelist, openid)
 	}
+	if a.cfg.OpenRegistration {
+		return true
+	}
 	n, err := a.db.UserCount()
 	return err == nil && n == 0
+}
+
+// IsAdmin reports whether a user may change shared sources and subscriptions.
+func (a *Auth) IsAdmin(userID int64) bool {
+	if a.cfg.DevLogin {
+		return true
+	}
+	user, err := a.db.User(userID)
+	if err != nil {
+		return false
+	}
+	if len(a.cfg.AdminOpenIDs) > 0 {
+		return slices.Contains(a.cfg.AdminOpenIDs, user.OpenID)
+	}
+	firstID, err := a.db.EarliestUserID()
+	return err == nil && firstID != 0 && firstID == userID
+}
+
+// AdminOnly allows only admins to call a route that changes shared sources or subscriptions.
+func (a *Auth) AdminOnly(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if !a.IsAdmin(UserID(c)) {
+			return echo.NewHTTPError(http.StatusForbidden, "只有管理员可以修改书源和订阅")
+		}
+		return next(c)
+	}
 }
 
 var wxSessionURL = "https://api.weixin.qq.com/sns/jscode2session"
