@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
 import { onHide, onLoad, onReady, onUnload } from '@dcloudio/uni-app'
-import { api, type Book, type Chapter, type ChapterContent } from '@/api'
+import { api, type Chapter, type ChapterContent } from '@/api'
 import { absoluteUrl, errorText, sourceDown, toastError } from '@/api/http'
 import {
   COMIC_MODES,
@@ -14,7 +14,9 @@ import {
   type Theme,
 } from '@/stores/app'
 import {
-  downloadChapters,
+  activeDownload,
+  downloadStats,
+  enqueueChapters,
   offlineBook,
   offlineChapters,
   offlineSupported,
@@ -478,6 +480,7 @@ watch(
 async function fetchChapter(id: number): Promise<Loaded> {
   let c: ChapterContent | null = readOfflineChapter(bookId, id)
   let origins: string[] | undefined
+  if (!c && offlineOnly) throw new Error('本机章节文件无法读取，请重新下载')
   if (!c) {
     c = isComic.value ? null : cachedChapter(id)
     if (!c) {
@@ -508,7 +511,7 @@ async function fetchChapter(id: number): Promise<Loaded> {
 
 let warming = false
 async function warm(fromId: number) {
-  if (warming) return
+  if (warming || offlineOnly) return
   warming = true
   try {
     const i = chapters.value.findIndex((ch) => ch.id === fromId)
@@ -640,6 +643,7 @@ async function appendNext() {
 
 let opened = false
 let firstChapter = 0
+let offlineOnly = false
 
 async function open() {
   let startId = firstChapter
@@ -647,47 +651,54 @@ async function open() {
   let restoreRatio = 0
   loading.value = true
   error.value = ''
-  try {
-    const [book, rawList] = await Promise.all([api.book(bookId), api.chapters(bookId)])
-    const list = rawList || []
-    bookMeta.value = {
-      id: book.id,
-      type: book.type,
-      title: book.title,
-      author: book.author,
-      cover: book.cover,
-      sourceName: book.sourceName,
-    }
-    isComic.value = book.type === 'comic'
-    favorite.value = !!book.favorite
-    chapters.value = list
-    refreshOfflineStats()
-    if (!startId) {
-      const localPos = getReadPosition(bookId)
-      const localValid = localPos && list.some((c) => c.id === localPos.chapterId) ? localPos : null
-      const serverProg = book.progress && list.some((c) => c.id === book.progress!.chapterId) ? book.progress : null
-      const serverAt = serverProg ? (serverProg.updatedAt || 0) * 1000 : 0
-      if (localValid && (!serverProg || localValid.at >= serverAt - 2000)) {
-        startId = localValid.chapterId
-        position = localValid.position
-        restoreRatio = localValid.ratio || 0
-      } else if (serverProg) {
-        startId = serverProg.chapterId
-        position = serverProg.position
+  let useLocal = offlineOnly
+  let openError = '本机没有已下载的章节'
+  if (!useLocal) {
+    try {
+      const [book, rawList] = await Promise.all([api.book(bookId), api.chapters(bookId)])
+      const list = rawList || []
+      bookMeta.value = {
+        id: book.id,
+        type: book.type,
+        title: book.title,
+        author: book.author,
+        cover: book.cover,
+        sourceName: book.sourceName,
+        sourceId: book.sourceId,
       }
+      isComic.value = book.type === 'comic'
+      favorite.value = !!book.favorite
+      chapters.value = list
+      if (!startId) {
+        const localPos = getReadPosition(bookId)
+        const localValid = localPos && list.some((c) => c.id === localPos.chapterId) ? localPos : null
+        const serverProg = book.progress && list.some((c) => c.id === book.progress!.chapterId) ? book.progress : null
+        const serverAt = serverProg ? (serverProg.updatedAt || 0) * 1000 : 0
+        if (localValid && (!serverProg || localValid.at >= serverAt - 2000)) {
+          startId = localValid.chapterId
+          position = localValid.position
+          restoreRatio = localValid.ratio || 0
+        } else if (serverProg) {
+          startId = serverProg.chapterId
+          position = serverProg.position
+        }
+      }
+    } catch (e) {
+      useLocal = true
+      openError = errorText(e)
     }
-  } catch (e) {
+  }
+  if (useLocal) {
     const local = offlineBook(bookId)
-    if (!local || !Object.keys(local.chapters).length) {
+    if (!local || !offlineChapters(bookId).length) {
       loading.value = false
-      error.value = errorText(e)
+      error.value = openError
       canSwitch.value = false
       return
     }
     bookMeta.value = local.book
     isComic.value = local.book.type === 'comic'
     chapters.value = offlineChapters(bookId)
-    refreshOfflineStats()
     if (!startId) {
       const localPos = getReadPosition(bookId)
       if (localPos && chapters.value.some((c) => c.id === localPos.chapterId)) {
@@ -706,6 +717,7 @@ async function open() {
 
 onLoad((query) => {
   bookId = Number(query?.bookId)
+  offlineOnly = query?.offline === '1'
   firstChapter = Number(query?.chapterId) || 0
   open()
 })
@@ -981,16 +993,10 @@ function setAutoSpeed(speed: number) {
 }
 
 // --- Offline Caching by Range (前50章 / 后50章 / 后面所有章节) ---
-const offlineCount = ref(0)
-const caching = ref(false)
-const cacheDone = ref(0)
-const cacheTotal = ref(0)
-const cacheSignal = { cancelled: false }
-
-function refreshOfflineStats() {
-  const b = offlineBook(bookId)
-  offlineCount.value = b ? Object.keys(b.chapters).length : 0
-}
+const localBook = computed(() => bookMeta.value && offlineBook(bookMeta.value.id))
+const offlineCount = computed(() => localBook.value ? downloadStats(localBook.value).done : 0)
+const downloading = computed(() => localBook.value && activeDownload(localBook.value.book.id))
+const openDownloads = () => uni.navigateTo({ url: '/pages/downloads/downloads' })
 
 const cacheRanges = computed(() => {
   const list = chapters.value
@@ -1019,48 +1025,14 @@ const cacheRanges = computed(() => {
   }
 })
 
-async function startCache(targetChapters: Chapter[]) {
-  if (caching.value) return
-  if (!offlineSupported) {
-    uni.showToast({ title: '当前平台不支持本机离线，可选择服务器缓存', icon: 'none' })
-    return
-  }
-  if (!bookMeta.value || !targetChapters.length) {
-    uni.showToast({ title: '没有可缓存的章节', icon: 'none' })
-    return
-  }
-  cacheSignal.cancelled = false
-  caching.value = true
-  cacheDone.value = 0
-  cacheTotal.value = targetChapters.length
+function startCache(targetChapters: Chapter[]) {
+  if (!bookMeta.value || !targetChapters.length) return
   try {
-    const failed = await downloadChapters(
-      bookMeta.value,
-      targetChapters,
-      (done, total) => {
-        cacheDone.value = done
-        cacheTotal.value = total
-      },
-      cacheSignal,
-    )
-    refreshOfflineStats()
-    if (cacheSignal.cancelled) {
-      uni.showToast({ title: `已停止，已完成 ${cacheDone.value} 章`, icon: 'none' })
-    } else {
-      uni.showToast({
-        title: failed ? `缓存完成，${failed} 章失败` : `已离线缓存 ${targetChapters.length} 章`,
-        icon: 'none',
-      })
-    }
+    const added = enqueueChapters(bookMeta.value, targetChapters)
+    uni.showToast({ title: added ? `已加入 ${added} 章` : '章节已离线或已在队列中', icon: 'none' })
   } catch (e) {
     toastError(e)
-  } finally {
-    caching.value = false
   }
-}
-
-function stopCache() {
-  cacheSignal.cancelled = true
 }
 
 async function cacheOnServer() {
@@ -1079,6 +1051,7 @@ function saveProgress() {
   persistLocalPosition(chapterPercent.value / 100)
   if (current.chapterId === saved.chapterId && current.position === saved.position) return
   saved = { ...current }
+  if (offlineOnly) return
   api.saveProgress(saved.chapterId, saved.position).catch(() => {
     // offline reading
   })
@@ -1091,7 +1064,6 @@ onHide(() => {
 })
 onUnload(() => {
   stopAutoPlay()
-  cacheSignal.cancelled = true
   clearInterval(saveTimer)
   clearTimeout(scrollTimer)
   clearTimeout(reanchorTimer)
@@ -1402,18 +1374,16 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
           <text class="sub-meta">本机已离线 {{ offlineCount }}/{{ chapters.length }} 章</text>
         </view>
 
-        <view v-if="caching" class="cache-progress">
-          <view class="cache-progress-text">正在离线下载：{{ cacheDone }} / {{ cacheTotal }} 章</view>
-          <view class="cache-track">
-            <view
-              class="cache-fill"
-              :style="{ width: Math.round((cacheDone / Math.max(1, cacheTotal)) * 100) + '%' }"
-            />
-          </view>
-          <view class="cache-stop" @click="stopCache">停止下载</view>
+        <view v-if="localBook" class="cache-progress" @click="openDownloads">
+          <view v-if="downloading" class="cache-progress-text">{{ localBook.chapters[downloading.chapterId]?.title }} · {{ downloading.stage }}</view>
+          <view class="cache-stop">查看离线章节与进度 ›</view>
         </view>
 
-        <view v-else class="cache-options">
+        <view v-if="offlineSupported && !offlineOnly" class="cache-options">
+          <view class="cache-card" @click="startCache(chapters.slice(currentIndex, currentIndex + 1))">
+            <view class="cache-card-title">当前章节</view>
+            <view class="cache-card-desc ellipsis">{{ title }}</view>
+          </view>
           <view class="cache-card" @click="startCache(cacheRanges.prev.chapters)">
             <view class="cache-card-title">前 50 章</view>
             <view class="cache-card-desc">{{ cacheRanges.prev.desc }}</view>
@@ -1617,13 +1587,13 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
           </view>
           <text class="dock-lbl">目录</text>
         </view>
-        <view class="dock-item" :class="{ active: panel === 'cache' || caching }" @click="togglePanel('cache')">
+        <view class="dock-item" :class="{ active: panel === 'cache' || downloading }" @click="togglePanel('cache')">
           <view class="dock-icon icon-download">
             <view class="dl-stem" />
             <view class="dl-arrow" />
             <view class="dl-tray" />
           </view>
-          <text class="dock-lbl">{{ caching ? `${cacheDone}/${cacheTotal}` : '缓存' }}</text>
+          <text class="dock-lbl">{{ downloading ? '下载中' : '缓存' }}</text>
         </view>
         <view class="dock-item" :class="{ active: panel === 'page' }" @click="togglePanel('page')">
           <view class="dock-icon icon-book">
@@ -2202,7 +2172,7 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
 
 .cache-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16rpx;
 }
 
@@ -2228,6 +2198,7 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
 }
 
 .cache-progress {
+  margin-bottom: 16rpx;
   padding: 18rpx 20rpx;
   border-radius: 14rpx;
   background: var(--menu-soft);
@@ -2237,19 +2208,6 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
 .cache-progress-text {
   font-size: 24rpx;
   margin-bottom: 14rpx;
-}
-
-.cache-track {
-  height: 10rpx;
-  border-radius: 5rpx;
-  background: var(--menu-border);
-  overflow: hidden;
-}
-
-.cache-fill {
-  height: 100%;
-  background: var(--brand);
-  border-radius: 5rpx;
 }
 
 .cache-stop {

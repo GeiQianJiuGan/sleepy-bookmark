@@ -35,7 +35,7 @@ const go = (url: string) => uni.navigateTo({ url })
       <wd-cell-group border>
         <wd-cell title="浏览历史" label="最近读过的小说和漫画" is-link clickable @click="go('/pages/history/history')" />
         <wd-cell title="书源管理" label="新增、导入、启停书源" is-link clickable @click="go('/pages/sources/list')" />
-        <wd-cell title="下载与缓存" label="离线内容和占用空间" is-link clickable @click="go('/pages/downloads/downloads')" />
+        <wd-cell title="下载与缓存" label="离线文章、章节进度和占用空间" is-link clickable @click="go('/pages/downloads/downloads')" />
       </wd-cell-group>
     </view>
     <view class="menu">

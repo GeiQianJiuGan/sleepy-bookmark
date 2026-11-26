@@ -5,7 +5,7 @@ import { api, type Book, type Chapter } from '@/api'
 import { errorText, sourceDown, toastError } from '@/api/http'
 import BookCover from '@/components/BookCover.vue'
 import LoadState from '@/components/LoadState.vue'
-import { downloadChapters, offlineBook, offlineSupported } from '@/utils/offline'
+import { chapterStatus, enqueueChapters, offlineBook, offlineSupported } from '@/utils/offline'
 import { getReadPosition } from '@/utils/readPosition'
 
 const PAGE = 100
@@ -24,9 +24,8 @@ let openSwitch = false
 const reversed = ref(false)
 const introOpen = ref(false)
 const shown = ref(PAGE)
-const downloaded = ref<Record<number, unknown>>({})
-const downloading = ref('')
-const signal = { cancelled: false }
+const localBook = computed(() => book.value && offlineBook(book.value.id))
+const openDownloads = () => uni.navigateTo({ url: '/pages/downloads/downloads' })
 
 const ordered = computed(() => (reversed.value ? [...chapters.value].reverse() : chapters.value))
 const visible = computed(() => ordered.value.slice(0, shown.value))
@@ -126,7 +125,6 @@ onLoad((query) => {
 onShow(() => {
   loadBook()
   localPos.value = getReadPosition(bookId)
-  downloaded.value = offlineBook(bookId)?.chapters || {}
 })
 onReachBottom(() => {
   if (shown.value < chapters.value.length) shown.value += PAGE
@@ -157,27 +155,13 @@ async function cacheOnServer() {
   }
 }
 
-async function download() {
-  if (!book.value || !chapters.value.length) return
-  if (downloading.value) {
-    signal.cancelled = true
-    return
-  }
-  signal.cancelled = false
-  downloading.value = '准备下载…'
+function download(list: Chapter[]) {
+  if (!book.value || !list.length) return
   try {
-    const failed = await downloadChapters(
-      book.value,
-      chapters.value,
-      (done, total) => (downloading.value = `下载中 ${done}/${total}（点击停止）`),
-      signal,
-    )
-    uni.showToast({ title: failed ? `${failed} 章下载失败，可再点一次重试` : '下载完成', icon: 'none' })
+    const added = enqueueChapters(book.value, list)
+    uni.showToast({ title: added ? `已加入 ${added} 章` : '章节已离线或已在队列中', icon: 'none' })
   } catch (e) {
     toastError(e)
-  } finally {
-    downloading.value = ''
-    downloaded.value = offlineBook(bookId)?.chapters || {}
   }
 }
 </script>
@@ -201,7 +185,8 @@ async function download() {
     <view class="actions">
       <wd-button size="small" :disabled="!chapters.length" @click="read()">{{ currentChapterId ? '继续阅读' : '开始阅读' }}</wd-button>
       <wd-button size="small" plain @click="toggleFavorite">{{ book.favorite ? '移出书架' : '加入书架' }}</wd-button>
-      <wd-button v-if="offlineSupported" size="small" plain @click="download">{{ downloading || '离线下载' }}</wd-button>
+      <wd-button v-if="offlineSupported" size="small" plain :disabled="!chapters.length" @click="download(chapters)">整本离线下载</wd-button>
+      <wd-button v-if="localBook" size="small" plain @click="openDownloads">查看离线进度</wd-button>
       <wd-button size="small" plain @click="cacheOnServer">服务器缓存</wd-button>
       <wd-button size="small" plain @click="switchSource">换源</wd-button>
     </view>
@@ -226,8 +211,11 @@ async function download() {
     </LoadState>
     <view v-for="c in visible" :key="c.id" class="chapter" @click="read(c.id)">
       <text class="ellipsis" :class="{ current: currentChapterId === c.id }">{{ c.title }}</text>
-      <text v-if="downloaded[c.id]" class="muted">已下载</text>
-      <text v-else-if="c.cached" class="muted">已缓存</text>
+      <text v-if="localBook && localBook.chapters[c.id]" class="muted" @click.stop="openDownloads">{{ chapterStatus(localBook, localBook.chapters[c.id]) }}</text>
+      <view v-else>
+        <text v-if="c.cached" class="muted">已缓存</text>
+        <text v-if="offlineSupported" class="link" @click.stop="download([c])">下载</text>
+      </view>
     </view>
   </view>
   <LoadState v-else :loading="!bookError" :error="bookError" @retry="loadBook" />
@@ -312,6 +300,10 @@ async function download() {
 
   .current {
     color: var(--brand);
+  }
+
+  .link {
+    margin-left: 16rpx;
   }
 
   .muted {

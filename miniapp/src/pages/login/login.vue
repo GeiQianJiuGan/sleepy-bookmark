@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { resumeDownloads } from '@/utils/offline'
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { errorText, login } from '@/api/http'
@@ -50,6 +51,7 @@ async function submit() {
   error.value = ''
   try {
     await login()
+    resumeDownloads()
     uni.switchTab({ url: '/pages/shelf/shelf' })
   } catch (e) {
     error.value = errorText(e)
