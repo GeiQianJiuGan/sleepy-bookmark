@@ -95,8 +95,8 @@ function openContract() {
         <view class="title">用户协议与隐私政策</view>
         <view class="body">
           <view>登录前请阅读并同意以下内容：</view>
-          <view>· 登录时使用微信登录凭证获取你的 openid，仅用于识别账号，不获取昵称、头像、手机号。</view>
-          <view>· 书架、浏览历史和阅读进度保存在本小程序的服务器上，用于多设备同步。</view>
+          <view>· 登录时使用微信登录凭证获取你的 openid，用于识别账号，管理员可查看 OpenID。不会获取昵称、头像、手机号。</view>
+          <view>· 书架、浏览历史和阅读进度按账号保存在服务器上，用于多设备同步。</view>
           <view>· 阅读缓存和离线下载保存在本机，可在「下载与缓存」中清除。</view>
           <view>· 不接入广告和统计，不向第三方提供你的信息。</view>
           <view class="more">

@@ -10,7 +10,7 @@ import {
   type Subscription,
   type SyncResult,
 } from '@/api'
-import { toastError } from '@/api/http'
+import { account, accountError, isAdmin, refreshAccount, toastError } from '@/api/http'
 
 type FilterKey = 'all' | 'comic' | 'novel' | 'disabled'
 
@@ -95,7 +95,13 @@ async function load() {
   }
 }
 
-onShow(load)
+function checkRole() {
+  refreshAccount().catch(() => {})
+}
+onShow(() => {
+  checkRole()
+  load()
+})
 
 const counts = computed(() => {
   let comic = 0
@@ -142,7 +148,7 @@ async function toggle(s: Source, enabled: boolean) {
   }
 }
 
-const edit = (id?: number) => uni.navigateTo({ url: '/pages/sources/edit' + (id ? `?id=${id}` : '') })
+const edit = (id?: number) => isAdmin.value && uni.navigateTo({ url: '/pages/sources/edit' + (id ? `?id=${id}` : '') })
 const importJSON = () => uni.navigateTo({ url: '/pages/sources/edit?json=1' })
 
 function add() {
@@ -337,6 +343,8 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
 
 <template>
   <view class="page">
+    <view v-if="accountError" class="dash-empty" @click="checkRole">账号权限加载失败，点击重试</view>
+    <view v-else-if="account && !isAdmin" class="dash-empty">所有成员共用书源，只有管理员可以修改书源和订阅。</view>
     <!-- Top monitoring & health dashboard -->
     <view v-if="sources.length" class="dashboard">
       <view class="dash-head">
@@ -348,7 +356,7 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
           </view>
         </view>
         <view class="dash-actions">
-          <wd-button size="small" :loading="checkingAll" @click="checkAll">
+          <wd-button v-if="isAdmin" size="small" :loading="checkingAll" @click="checkAll">
             {{ checkingAll ? '分析中' : '分析全部' }}
           </wd-button>
           <wd-button size="small" plain @click="exportAll">导出</wd-button>
@@ -374,19 +382,19 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
         </view>
       </view>
       <view v-else class="dash-empty">
-        暂无采样记录，搜索阅读或点击「分析全部」开始监测响应速度与有效准确率
+        暂无采样记录，使用书源搜索或阅读后可查看统计
       </view>
 
-      <view class="dash-rule">
+      <view v-if="isAdmin" class="dash-rule">
         准确率低于 50% 自动停用；点击「分析」若恢复达标将自动重新开启
       </view>
     </view>
 
     <!-- Subscriptions section -->
-    <view v-if="subscriptions.length || adding" class="section">
+    <view v-if="subscriptions.length || (isAdmin && adding)" class="section">
       <view class="section-head">
         <view class="section-title">书源订阅（{{ subscriptions.length }}）</view>
-        <view class="section-tools">
+        <view v-if="isAdmin" class="section-tools">
           <text v-if="subscriptions.length > 1" class="text-btn" @click="syncAll">
             {{ syncing === -2 ? '同步中…' : '全部同步' }}
           </text>
@@ -394,7 +402,7 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
         </view>
       </view>
 
-      <view v-for="sub in subscriptions" :key="sub.id" class="sub-card" @click="manage(sub)">
+      <view v-for="sub in subscriptions" :key="sub.id" class="sub-card" @click="isAdmin && manage(sub)">
         <view class="sub-main">
           <view class="sub-name ellipsis">{{ sub.name }}</view>
           <view class="sub-url ellipsis">{{ sub.url }}</view>
@@ -402,6 +410,7 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
           <view v-else class="sub-meta">{{ sub.sources }} 个书源 · {{ when(sub.syncedAt) }}</view>
         </view>
         <wd-button
+          v-if="isAdmin"
           size="small"
           plain
           :loading="syncing === sub.id"
@@ -411,7 +420,7 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
         </wd-button>
       </view>
 
-      <view v-if="adding" class="sub-form">
+      <view v-if="isAdmin && adding" class="sub-form">
         <view class="row">
           <input v-model="url" class="url-input" placeholder="书源列表 JSON 订阅地址" />
           <text class="text-btn" @click="paste">粘贴</text>
@@ -458,7 +467,7 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
             </view>
           </view>
 
-          <view class="card-controls">
+          <view v-if="isAdmin" class="card-controls">
             <view
               class="analyze-btn"
               :class="{ busy: checkingId === s.id }"
@@ -503,9 +512,9 @@ const from = (s: Source) => subscriptions.value.find((sub) => sub.id === s.subsc
     </view>
 
     <view v-else-if="!loading && sources.length" class="empty">当前筛选下没有书源</view>
-    <view v-else-if="!loading" class="empty">还没有书源，点击下方按钮新增、导入或订阅</view>
+    <view v-else-if="!loading" class="empty">{{ isAdmin ? '还没有书源，可以新增、导入或订阅' : '暂无共享书源' }}</view>
 
-    <view class="footer">
+    <view v-if="isAdmin" class="footer">
       <wd-button block @click="add">新增 / 导入 / 订阅书源</wd-button>
     </view>
   </view>

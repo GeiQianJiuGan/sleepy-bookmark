@@ -1,3 +1,5 @@
+import { computed, ref } from 'vue'
+import { bindLocalSession } from '@/utils/accountScope'
 import { API_BASE, REQUEST_TIMEOUT } from '@/config'
 
 // The access token is short-lived; the refresh token ("rtoken") renews it without another wx.login.
@@ -101,11 +103,16 @@ function saveSession(session: Session, started: number): string {
   uni.setStorageSync(TOKEN_KEY, session.token)
   uni.setStorageSync(EXPIRES_KEY, Date.now() + session.expiresIn * 1000)
   uni.setStorageSync(REFRESH_KEY, session.refreshToken)
+  bindLocalSession(session.refreshToken)
   return session.token
 }
 
 function clearSession() {
   epoch++
+  account.value = null
+  profileRequest = null
+  accountError.value = ''
+  bindLocalSession('')
   uni.removeStorageSync(TOKEN_KEY)
   uni.removeStorageSync(EXPIRES_KEY)
   uni.removeStorageSync(REFRESH_KEY)
@@ -174,7 +181,11 @@ function accessToken(): Promise<string> {
 /** Logs in through wx.login. Only the login page calls this, after the user agreed to the privacy policy. */
 export async function login(): Promise<void> {
   const started = epoch
-  saveSession(await send<Session>('POST', '/auth/login', await credential()), started)
+  const session = await send<Session>('POST', '/auth/login', await credential())
+  if (started !== epoch) throw new ApiError(401, '登录状态已变更')
+  clearSession()
+  pending = null
+  saveSession(session, epoch)
 }
 
 export function logout() {
@@ -185,22 +196,70 @@ export function logout() {
 }
 
 export async function request<T = void>(method: Method, path: string, data?: unknown, timeout?: number): Promise<T> {
-  try {
-    return await send<T>(method, path, data, await accessToken(), timeout)
-  } catch (e) {
-    if (!(e instanceof ApiError)) throw e
-    if (e.status === 401 && hasSession()) {
-      // The access token was refused (expired early, server secret changed): renew it once.
-      return send<T>(method, path, data, await refreshSession(), timeout)
+  const started = epoch
+  function checkSession() {
+    if (started !== epoch) throw new ApiError(401, '登录状态已变更')
+  }
+  async function attempt(refresh = false) {
+    checkSession()
+    const token = await (refresh ? refreshSession() : accessToken())
+    checkSession()
+    try {
+      const result = await send<T>(method, path, data, token, timeout)
+      checkSession()
+      return result
+    } catch (e) {
+      checkSession()
+      if (e instanceof ApiError && e.status === 403 && (path === '/users' || /^\/(sources|subscriptions)(\/|$)/.test(path)) && account.value?.admin) {
+        account.value = { ...account.value, admin: false }
+      }
+      throw e
     }
+  }
+  try {
+    return await attempt()
+  } catch (e) {
+    checkSession()
+    if (!(e instanceof ApiError)) throw e
+    if (e.status === 401 && hasSession()) return attempt(true)
     if (e.status === 0 && method === 'GET') {
-      // A dropped connection (switching networks, waking from the background) usually works
-      // on the second try, so reads do not bother the user with it.
       await sleep(800)
-      return send<T>(method, path, data, await accessToken(), timeout)
+      return attempt()
     }
     throw e
   }
+}
+
+export interface Account {
+  id: number
+  admin: boolean
+}
+
+export const account = ref<Account | null>(null)
+export const isAdmin = computed(() => account.value?.admin === true)
+export const accountError = ref('')
+let profileRequest: Promise<Account> | null = null
+
+export function refreshAccount(): Promise<Account> {
+  if (profileRequest) return profileRequest
+  const started = epoch
+  accountError.value = ''
+  const task = request<Account>('GET', '/me').then(me => {
+    if (started !== epoch) throw new ApiError(401, '登录状态已变更')
+    if (!Number.isSafeInteger(me?.id) || me.id <= 0 || typeof me.admin !== 'boolean') throw new Error('账号信息格式错误')
+    account.value = me
+    return me
+  }).catch(e => {
+    if (started === epoch) {
+      account.value = null
+      accountError.value = errorText(e)
+    }
+    throw e
+  }).finally(() => {
+    if (profileRequest === task) profileRequest = null
+  })
+  profileRequest = task
+  return task
 }
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))

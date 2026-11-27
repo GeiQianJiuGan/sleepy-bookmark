@@ -1,5 +1,7 @@
 // Stores the exact last-viewed screen position per book (chapter, comic page + pixel offset,
 // or novel scroll offset + ratio) with automatic LRU eviction when capacity or storage is tight.
+import { watch } from 'vue'
+import { accountScope, scopedKey } from './accountScope'
 import { evictOldestReadCache } from './readCache'
 
 export interface ReadPosition {
@@ -17,16 +19,13 @@ export interface ReadPosition {
   at: number
 }
 
-const STORAGE_KEY = 'readpos:v1'
+const storageKey = () => scopedKey('readpos:v1')
 const MAX_ENTRIES = 100
 
 let records: Record<number, ReadPosition> = {}
-try {
-  const raw = uni.getStorageSync(STORAGE_KEY)
-  if (raw && typeof raw === 'object') records = raw
-} catch {
-  records = {}
-}
+watch(accountScope, scope => {
+  records = scope === null ? {} : uni.getStorageSync(storageKey()) || {}
+}, { immediate: true, flush: 'sync' })
 
 function evictLeastRecent(targetCount: number) {
   const ids = Object.keys(records)
@@ -43,7 +42,7 @@ function persist() {
     evictLeastRecent(MAX_ENTRIES)
   }
   try {
-    uni.setStorageSync(STORAGE_KEY, records)
+    uni.setStorageSync(storageKey(), records)
     return
   } catch {
     // Storage quota tight: drop oldest 30% of reading positions first.
@@ -51,13 +50,13 @@ function persist() {
     evictLeastRecent(keep)
   }
   try {
-    uni.setStorageSync(STORAGE_KEY, records)
+    uni.setStorageSync(storageKey(), records)
     return
   } catch {
     // Still tight: evict oldest unused novel chapter cache entries and retry once more.
     evictOldestReadCache(10)
     try {
-      uni.setStorageSync(STORAGE_KEY, records)
+      uni.setStorageSync(storageKey(), records)
     } catch {
       // Give up silently; reading continues without crashing.
     }
@@ -70,7 +69,7 @@ export function getReadPosition(bookId: number): ReadPosition | null {
 }
 
 export function saveReadPosition(pos: Omit<ReadPosition, 'at'>) {
-  if (!pos.bookId || !pos.chapterId) return
+  if (accountScope.value === null || !pos.bookId || !pos.chapterId) return
   records[pos.bookId] = { ...pos, at: Date.now() }
   persist()
 }
@@ -86,9 +85,10 @@ export function readPositionCount(): number {
 }
 
 export function clearReadPositions() {
+  if (accountScope.value === null) return
   records = {}
   try {
-    uni.removeStorageSync(STORAGE_KEY)
+    uni.removeStorageSync(storageKey())
   } catch {
     // ignore
   }

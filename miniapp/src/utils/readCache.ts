@@ -3,36 +3,41 @@
 // limit, and the chapters read longest ago make room for new ones.
 // Offline downloads are a separate store (utils/offline.ts) that nothing evicts, and comics are
 // not cached on the device at all: their pages are too big for it.
+import { ref, watch } from 'vue'
+import { accountScope, scopedKey } from './accountScope'
 import type { ChapterContent } from '@/api'
 
 interface Entry {
   bytes: number
-  /** When the chapter was last read. */
   at: number
 }
 
-const INDEX_KEY = 'readcache:index'
-const storageKey = (id: number) => `readcache:${id}`
-
-let fs: any = null
+const indexKey = () => scopedKey('readcache:index')
+const storageKey = (id: number) => scopedKey(`readcache:${id}`)
+let fs: UniApp.FileSystemManager | undefined
 let ROOT = ''
-// Without a file system the chapters share the 10 MB of storage with everything else.
 let limit = 2 * 1024 * 1024
 // #ifdef MP-WEIXIN
 fs = uni.getFileSystemManager()
 ROOT = `${(uni as any).env.USER_DATA_PATH}/readcache`
 limit = 30 * 1024 * 1024
-try {
-  fs.mkdirSync(ROOT, true)
-} catch {
-  // already exists
-}
 // #endif
 export const READ_CACHE_LIMIT = limit
 
-const file = (id: number) => `${ROOT}/${id}.json`
-const index: Record<number, Entry> = uni.getStorageSync(INDEX_KEY) || {}
-const saveIndex = () => uni.setStorageSync(INDEX_KEY, index)
+const file = (id: number) => `${scopedKey(ROOT)}/${id}.json`
+let index: Record<number, Entry> = {}
+const version = ref(0)
+watch(accountScope, scope => {
+  index = scope === null ? {} : uni.getStorageSync(indexKey()) || {}
+  version.value++
+  if (fs && scope !== null) {
+    try { fs.mkdirSync(scopedKey(ROOT), true) } catch { /* already exists */ }
+  }
+}, { immediate: true, flush: 'sync' })
+const saveIndex = () => {
+  version.value++
+  if (accountScope.value !== null) uni.setStorageSync(indexKey(), index)
+}
 
 function utf8Bytes(s: string): number {
   let n = 0
@@ -53,9 +58,18 @@ function drop(id: number) {
   delete index[id]
 }
 
-export const readCacheBytes = () => Object.values(index).reduce((sum, e) => sum + e.bytes, 0)
-export const readCacheCount = () => Object.keys(index).length
-export const inReadCache = (id: number) => !!index[id]
+export const readCacheBytes = () => {
+  void version.value
+  return Object.values(index).reduce((sum, e) => sum + e.bytes, 0)
+}
+export const readCacheCount = () => {
+  void version.value
+  return Object.keys(index).length
+}
+export const inReadCache = (id: number) => {
+  void version.value
+  return !!index[id]
+}
 
 /** Returns a cached chapter and marks it as just read. */
 export function cachedChapter(id: number): ChapterContent | null {
@@ -75,7 +89,7 @@ export function cachedChapter(id: number): ChapterContent | null {
 
 /** Stores a novel chapter, evicting the chapters read longest ago until it fits. */
 export function cacheChapter(c: ChapterContent) {
-  if (!c.text) return
+  if (!c.text || accountScope.value === null) return
   const raw = JSON.stringify(c)
   const bytes = utf8Bytes(raw)
   if (bytes > limit) return

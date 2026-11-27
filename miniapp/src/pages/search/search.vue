@@ -374,7 +374,7 @@ watch(
       <view v-else class="hint">
         <template v-if="!sources.length">
           <view class="muted">还没有启用的{{ kind }}书源</view>
-          <wd-button custom-style="margin-top: 36rpx" size="small" @click="toSources">去书源管理</wd-button>
+          <wd-button custom-style="margin-top: 36rpx" size="small" @click="toSources">查看共享书源</wd-button>
         </template>
         <view v-else class="muted">
           {{ tab === 'feed' ? '暂时没有新的推荐' : '这个书源暂时没有榜单' }}，输入关键词直接搜索

@@ -3,8 +3,11 @@ import { computed, ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { api, type Mode, type SourceMetrics, type TestReport } from '@/api'
 import { toastError } from '@/api/http'
+import { useAdminPage } from '@/utils/adminPage'
+import LoadState from '@/components/LoadState.vue'
 import { useAppStore } from '@/stores/app'
 
+const { allowed, loading: roleLoading, error: roleError, refresh: refreshRole } = useAdminPage()
 const sourceId = ref(0)
 /** Simple: a name and an address, everything else recognised. Advanced: the rule as JSON. */
 const advanced = ref(false)
@@ -26,13 +29,18 @@ const busy = ref(false)
 // A trial run only speaks for the rule it ran.
 watch([type, baseUrl, text], () => (report.value = null))
 
-onLoad(async (query) => {
+onLoad((query) => {
   sourceId.value = Number(query?.id) || 0
   if (query?.json) advanced.value = true
-  if (!sourceId.value) return
+})
+
+let initialized = false
+watch(allowed, async canEdit => {
+  if (!canEdit || initialized || !sourceId.value) return
   try {
     const src = (await api.sources()).find((s) => s.id === sourceId.value)
-    if (!src) return
+    if (!src || !allowed.value) return
+    initialized = true
     name.value = src.name
     type.value = src.type
     enabled.value = src.enabled
@@ -270,7 +278,8 @@ const lines = computed(() => {
 </script>
 
 <template>
-  <view class="edit">
+  <LoadState v-if="!allowed" :loading="roleLoading" :error="roleError" empty="只有管理员可以修改书源和订阅" @retry="refreshRole" />
+  <view v-else class="edit">
     <view class="modes">
       <view class="mode" :class="{ on: !advanced }" @click="setMode(false)">简单</view>
       <view class="mode" :class="{ on: advanced }" @click="setMode(true)">高级（JSON）</view>

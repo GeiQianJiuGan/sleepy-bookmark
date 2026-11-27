@@ -1,9 +1,10 @@
 // A book id belongs to one source on the server. Keep that identity with the catalog
 // and use chapter ids (never titles or positions) for both the queue and content files.
-import { reactive, ref, shallowReactive } from 'vue'
+import { reactive, ref, shallowReactive, watch } from 'vue'
 import { api, type Book, type Chapter, type ChapterContent } from '@/api'
 import { absoluteUrl, ApiError, hasSession } from '@/api/http'
 import { privacyAgreed } from './privacy'
+import { accountScope, scopedKey } from './accountScope'
 import { cachedChapter } from './readCache'
 
 type BookInfo = Pick<Book, 'id' | 'type' | 'title' | 'author' | 'cover' | 'sourceName'> & { sourceId?: number }
@@ -22,8 +23,8 @@ export interface OfflineBook {
   pauseReason: string
 }
 
-const LIST_KEY = 'offline:books'
-const bookKey = (id: number) => `offline:book:${id}`
+const listKey = () => scopedKey('offline:books')
+const bookKey = (id: number) => scopedKey(`offline:book:${id}`)
 let fs: UniApp.FileSystemManager | undefined
 let root = ''
 // #ifdef MP-WEIXIN
@@ -31,7 +32,7 @@ fs = uni.getFileSystemManager()
 root = `${(uni as any).env.USER_DATA_PATH}/offline`
 // #endif
 export const offlineSupported = !!fs
-const dir = (id: number) => `${root}/${id}`
+const dir = (id: number) => `${scopedKey(root)}/${id}`
 const chapterFile = (bookId: number, id: number) => `${dir(bookId)}/${id}.json`
 
 const library = shallowReactive<Record<number, OfflineBook>>({})
@@ -40,6 +41,13 @@ export const networkAvailable = ref(true)
 export const managerError = ref('')
 let loaded = false
 let running = false
+
+watch(accountScope, () => {
+  for (const id of Object.keys(library)) delete library[Number(id)]
+  active.value = null
+  managerError.value = ''
+  loaded = false
+}, { flush: 'sync' })
 
 function message(e: unknown) {
   return e instanceof Error ? e.message : (e as { errMsg?: string })?.errMsg || String(e)
@@ -54,8 +62,8 @@ function ensureDir(path: string) {
 }
 
 function restore() {
-  if (loaded || !fs) return
-  for (const id of (uni.getStorageSync(LIST_KEY) || []) as number[]) {
+  if (accountScope.value === null || loaded || !fs) return
+  for (const id of (uni.getStorageSync(listKey()) || []) as number[]) {
     const meta = uni.getStorageSync(bookKey(id))
     if (!meta || library[id]) continue
     const chapters: Record<number, DownloadChapter> = {}
@@ -95,6 +103,12 @@ export function offlineChapters(id: number): Chapter[] {
   return Object.values(offlineBook(id)?.chapters || {}).filter(c => c.bytes !== undefined)
     .sort((a, b) => a.idx - b.idx)
     .map(c => ({ id: c.id, bookId: id, idx: c.idx, title: c.title, cached: true }))
+}
+
+export function offlineAllChapters(id: number): Chapter[] {
+  return Object.values(offlineBook(id)?.chapters || {})
+    .sort((a, b) => a.idx - b.idx)
+    .map(c => ({ id: c.id, bookId: id, idx: c.idx, title: c.title, cached: c.bytes !== undefined }))
 }
 
 export function readOfflineChapter(bookId: number, id: number): ChapterContent | null {
@@ -175,6 +189,7 @@ function saveMeta(b: OfflineBook) {
 
 export function enqueueChapters(book: BookInfo, chapters: Chapter[]) {
   if (!fs) throw new Error('当前平台不支持离线下载')
+  if (accountScope.value === null) throw new Error('请重新登录后下载')
   if (!book.sourceId) throw new Error('请联网打开这本书后再添加下载')
   if (chapters.some(c => c.bookId !== book.id)) throw new Error('章节不属于当前书源的这本书')
   let b = offlineBook(book.id)
@@ -185,7 +200,7 @@ export function enqueueChapters(book: BookInfo, chapters: Chapter[]) {
     ensureDir(dir(id))
     b = reactive({ book: info, chapters: {}, pending: new Set<number>(), pauseReason: '' })
     saveMeta(b)
-    uni.setStorageSync(LIST_KEY, [...Object.keys(library).map(Number), id])
+    uni.setStorageSync(listKey(), [...Object.keys(library).map(Number), id])
     library[id] = b
   } else {
     b.book = info
@@ -293,12 +308,14 @@ export function resumeDownloads() {
 }
 
 export function setDownloadsPaused(b: OfflineBook, paused: boolean) {
+  if (library[b.book.id] !== b) return
   b.pauseReason = paused ? '已暂停' : ''
   saveMeta(b)
   if (!paused) resumeDownloads()
 }
 
 export function retryDownloads(b: OfflineBook, chapterId?: number) {
+  if (library[b.book.id] !== b) return
   const failed = Object.values(b.chapters).filter(c => c.error && (!chapterId || c.id === chapterId))
   saveRows(b, failed.map(c => ({ ...c, error: undefined })))
   setDownloadsPaused(b, false)
@@ -310,7 +327,7 @@ export function removeOfflineBook(id: number) {
   // An in-flight response checks object identity before writing, even if re-added.
   fs!.rmdirSync(dir(id), true)
   delete library[id]
-  uni.setStorageSync(LIST_KEY, Object.keys(library).map(Number))
+  uni.setStorageSync(listKey(), Object.keys(library).map(Number))
   uni.removeStorageSync(bookKey(id))
 }
 

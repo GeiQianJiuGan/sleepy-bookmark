@@ -2,7 +2,7 @@
 // before the user has agreed.
 
 /** Bump when the policy text changes in a way that needs the user to agree again. */
-export const PRIVACY_VERSION = '2026-11-24'
+export const PRIVACY_VERSION = '2026-11-26'
 
 const KEY = 'privacyAgreed'
 

@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, type Account } from './http'
 
 export type Mode = 'novel' | 'comic'
 
@@ -176,6 +176,13 @@ export interface TestReport {
   content?: { text?: string; images?: string[] }
 }
 
+export interface RegisteredUser extends Account {
+  openid: string
+  createdAt: number
+  favorites: number
+  history: number
+}
+
 export interface Task {
   id: number
   bookId: number
@@ -209,6 +216,7 @@ const q = encodeURIComponent
 const LONG_TIMEOUT = 130_000
 
 export const api = {
+  users: () => request<RegisteredUser[]>('GET', '/users'),
   /** Searches every enabled source, or only `source`; `exact` keeps the books of that very title. */
   search: (type: Mode, key: string, opt: { source?: number; exact?: boolean } = {}) =>
     request<SearchResult>(

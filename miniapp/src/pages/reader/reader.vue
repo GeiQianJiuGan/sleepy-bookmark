@@ -24,6 +24,8 @@ import {
   type OfflineBook,
 } from '@/utils/offline'
 import { cacheChapter, cachedChapter, inReadCache } from '@/utils/readCache'
+import { getChapterBadge, summarizeChapterStatuses } from '@/utils/chapterStatus'
+import { accountScope } from '@/utils/accountScope'
 import { getReadPosition, saveReadPosition } from '@/utils/readPosition'
 
 interface Loaded {
@@ -80,6 +82,7 @@ function paintBar() {
 onReady(paintBar)
 watch(theme, paintBar)
 
+let readerScope: string | null = null
 let bookId = 0
 const bookMeta = ref<OfflineBook['book'] | null>(null)
 const isComic = ref(false)
@@ -480,14 +483,12 @@ watch(
 async function fetchChapter(id: number): Promise<Loaded> {
   let c: ChapterContent | null = readOfflineChapter(bookId, id)
   let origins: string[] | undefined
+  if (!c && !isComic.value) c = cachedChapter(id)
   if (!c && offlineOnly) throw new Error('本机章节文件无法读取，请重新下载')
   if (!c) {
-    c = isComic.value ? null : cachedChapter(id)
-    if (!c) {
-      c = await api.chapter(id)
-      cacheChapter(c)
-      origins = c.origins
-    }
+    c = await api.chapter(id)
+    cacheChapter(c)
+    origins = c.origins
   }
   const i = chapters.value.findIndex((ch) => ch.id === id)
   const imgs = c.images?.length ? c.images.map(absoluteUrl) : undefined
@@ -716,6 +717,7 @@ async function open() {
 }
 
 onLoad((query) => {
+  readerScope = accountScope.value
   bookId = Number(query?.bookId)
   offlineOnly = query?.offline === '1'
   firstChapter = Number(query?.chapterId) || 0
@@ -777,7 +779,7 @@ async function toggleFavorite() {
 }
 
 function persistLocalPosition(ratio = 0) {
-  if (!bookId || !current.chapterId) return
+  if (readerScope === null || readerScope !== accountScope.value || !bookId || !current.chapterId) return
   const chTitle =
     chapters.value.find((c) => c.id === current.chapterId)?.title ||
     loaded.value.find((c) => c.id === current.chapterId)?.title ||
@@ -1047,7 +1049,7 @@ async function cacheOnServer() {
 
 // --- Progress persistence ---
 function saveProgress() {
-  if (!current.chapterId) return
+  if (readerScope === null || readerScope !== accountScope.value || !current.chapterId) return
   persistLocalPosition(chapterPercent.value / 100)
   if (current.chapterId === saved.chapterId && current.position === saved.position) return
   saved = { ...current }
@@ -1072,6 +1074,14 @@ onUnload(() => {
   saveProgress()
 })
 
+const catalogReversed = ref(false)
+const catalogChapters = computed(() => (catalogReversed.value ? [...chapters.value].reverse() : chapters.value))
+const catalogSummary = computed(() => summarizeChapterStatuses(chapters.value, localBook.value))
+
+function catalogBadge(c: Chapter) {
+  return getChapterBadge(c, localBook.value)
+}
+
 function jump(c?: Chapter) {
   if (!c) return
   stopAutoPlay()
@@ -1081,9 +1091,10 @@ function jump(c?: Chapter) {
 }
 
 function scrollCatalogToCurrent() {
-  if (!chapters.value.length) return
-  const idx = currentIndex.value >= 0 ? currentIndex.value : 0
-  const anchor = chapters.value[Math.max(0, idx - 3)]
+  const list = catalogChapters.value
+  if (!list.length) return
+  const idx = list.findIndex((c) => c.id === currentId.value)
+  const anchor = list[Math.max(0, (idx >= 0 ? idx : 0) - 3)]
   if (!anchor) return
   catalogIntoView.value = ''
   nextTick(() => {
@@ -1611,10 +1622,23 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
 
     <!-- Catalog Drawer -->
     <wd-popup v-model="catalog" position="left">
-      <view class="catalog-wrap">
+      <view class="catalog-wrap" :class="{ night }">
         <view class="catalog-head" :style="{ paddingTop: statusBar + 12 + 'px' }">
-          <view class="catalog-title">目录（{{ chapters.length }}）</view>
-          <text class="catalog-locate" @click="scrollCatalogToCurrent">定位当前</text>
+          <view class="catalog-head-top">
+            <view class="catalog-title">目录（{{ chapters.length }}）</view>
+            <view class="catalog-actions">
+              <text class="catalog-locate" @click="catalogReversed = !catalogReversed">{{ catalogReversed ? '正序' : '倒序' }}</text>
+              <text class="catalog-locate" @click="scrollCatalogToCurrent">定位当前</text>
+            </view>
+          </view>
+          <view
+            v-if="catalogSummary.downloaded || catalogSummary.cached || catalogSummary.serverCached"
+            class="catalog-stats"
+          >
+            <text v-if="catalogSummary.downloaded" class="catalog-stat downloaded">已下载 {{ catalogSummary.downloaded }}</text>
+            <text v-if="catalogSummary.cached" class="catalog-stat cached">已缓存 {{ catalogSummary.cached }}</text>
+            <text v-if="catalogSummary.serverCached" class="catalog-stat server">云端 {{ catalogSummary.serverCached }}</text>
+          </view>
         </view>
         <scroll-view
           scroll-y
@@ -1624,7 +1648,7 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
           :scroll-into-view="catalogIntoView"
         >
           <view
-            v-for="c in chapters"
+            v-for="c in catalogChapters"
             :id="`c-${c.id}`"
             :key="c.id"
             class="catalog-item"
@@ -1632,7 +1656,12 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
             @click="jump(c)"
           >
             <view class="catalog-name ellipsis">{{ c.title }}</view>
-            <text v-if="c.id === currentId" class="catalog-badge">当前</text>
+            <view class="catalog-badges">
+              <text v-if="c.id === currentId" class="catalog-badge current">当前</text>
+              <text v-if="catalogBadge(c)" class="catalog-badge" :class="catalogBadge(c)!.kind">
+                {{ catalogBadge(c)!.label }}
+              </text>
+            </view>
           </view>
         </scroll-view>
       </view>
@@ -2458,19 +2487,55 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
 .catalog-wrap {
   display: flex;
   flex-direction: column;
-  width: 72vw;
+  width: 76vw;
   height: 100vh;
   background: #fff;
   color: #222;
+
+  &.night {
+    background: #1e1e20;
+    color: #d6d6d6;
+
+    .catalog-head,
+    .catalog-item {
+      border-bottom-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .catalog-item.current {
+      background: rgba(192, 57, 43, 0.16);
+    }
+
+    .catalog-stat.downloaded,
+    .catalog-badge.downloaded {
+      color: #81c784;
+      background: rgba(76, 175, 80, 0.18);
+    }
+
+    .catalog-stat.cached,
+    .catalog-badge.cached {
+      color: #64b5f6;
+      background: rgba(33, 150, 243, 0.18);
+    }
+
+    .catalog-stat.server,
+    .catalog-badge.server {
+      color: #a0a0a6;
+      background: rgba(255, 255, 255, 0.08);
+    }
+  }
 }
 
 .catalog-head {
   flex: none;
+  padding: 24rpx 32rpx 18rpx;
+  border-bottom: 1rpx solid var(--line);
+}
+
+.catalog-head-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 24rpx 32rpx 20rpx;
-  border-bottom: 1rpx solid var(--line);
+  gap: 16rpx;
 }
 
 .catalog-title {
@@ -2478,9 +2543,43 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
   font-weight: 600;
 }
 
+.catalog-actions {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+}
+
 .catalog-locate {
   font-size: 24rpx;
   color: var(--brand);
+}
+
+.catalog-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 12rpx;
+}
+
+.catalog-stat {
+  padding: 2rpx 12rpx;
+  border-radius: 14rpx;
+  font-size: 20rpx;
+
+  &.downloaded {
+    color: #2f7d57;
+    background: #e7f4ed;
+  }
+
+  &.cached {
+    color: #1d6fa5;
+    background: #e6f2fa;
+  }
+
+  &.server {
+    color: #7a7268;
+    background: #f2efe9;
+  }
 }
 
 .catalog-scroll {
@@ -2493,7 +2592,8 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 24rpx 32rpx;
+  gap: 12rpx;
+  padding: 24rpx 28rpx;
   border-bottom: 1rpx solid var(--line);
 
   &.current {
@@ -2508,14 +2608,48 @@ const toggleNight = () => setTheme(night.value ? store.reader.dayTheme : 'dark')
   min-width: 0;
 }
 
+.catalog-badges {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
 .catalog-badge {
   flex: none;
-  margin-left: 12rpx;
   padding: 2rpx 12rpx;
   border-radius: 16rpx;
   font-size: 20rpx;
   font-weight: 500;
-  color: var(--brand);
-  background: #f6e3df;
+
+  &.current {
+    color: var(--brand);
+    background: #f6e3df;
+  }
+
+  &.downloaded {
+    color: #2f7d57;
+    background: #e7f4ed;
+  }
+
+  &.cached {
+    color: #1d6fa5;
+    background: #e6f2fa;
+  }
+
+  &.server {
+    color: #7a7268;
+    background: #f2efe9;
+  }
+
+  &.downloading {
+    color: #b26a00;
+    background: #fff3e0;
+  }
+
+  &.failed {
+    color: #c0392b;
+    background: #fdecea;
+  }
 }
 </style>
